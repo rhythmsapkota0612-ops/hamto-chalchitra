@@ -357,7 +357,7 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
 
 // 🎬 MOVIES
 app.get("/proxy/hydra", async (req, res) => {
-  const { t } = req.query;
+  const { t, i } = req.query;
 
   if (!t) {
     return res
@@ -366,7 +366,7 @@ app.get("/proxy/hydra", async (req, res) => {
   }
 
   try {
-    const hydraUrl = `https://hydrahd.sh/ajax/mov_0.php?t=${t}`;
+    const hydraUrl = `https://hydrahd.sh/ajax/mov_0.php?i=${i}t=${t}`;
 
     const response = await fetch(hydraUrl, {
       method: "GET",
