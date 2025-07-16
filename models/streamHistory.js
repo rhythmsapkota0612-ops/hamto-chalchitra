@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const streamHistorySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  imdbId: { type: Number },
+  imdbId: { type: String },
   tmdbId: { type: Number, required: true },
   isCompleted: { type: Boolean, default: false },
   posterUrl: { type: String },

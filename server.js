@@ -119,18 +119,41 @@ app.post("/auth/login", async (req, res) => {
 app.get("/history/stream", authenticateToken, async (req, res) => {
   try {
     const { streamType, isCompleted } = req.query;
+    const userId =
+      typeof req.user.id === "string" &&
+      mongoose.Types.ObjectId.isValid(req.user.id)
+        ? new mongoose.Types.ObjectId(req.user.id)
+        : undefined;
 
-    const query = { userId: req.user.id };
+    if (!userId) {
+      return res.status(400).json({ error: "Invalid user ID" });
+    }
 
-    if (streamType) query.streamType = streamType;
-    if (isCompleted !== undefined) query.isCompleted = isCompleted === "true";
+    const matchStage = {
+      userId,
+    };
 
-    const history = await StreamHistory.find(query).sort({ watchedAt: -1 });
+    if (streamType) matchStage.streamType = streamType;
+    if (isCompleted !== undefined)
+      matchStage.isCompleted = isCompleted === "true";
+
+    const history = await StreamHistory.aggregate([
+      { $match: matchStage },
+      { $sort: { watchedAt: -1 } },
+      {
+        $group: {
+          _id: "$tmdbId",
+          doc: { $first: "$$ROOT" },
+        },
+      },
+      { $replaceRoot: { newRoot: "$doc" } },
+      { $sort: { watchedAt: -1 } },
+    ]);
 
     res.status(200).json({ history });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to fetch history" });
+    console.error("Error fetching stream history:", err);
+    res.status(500).json({ error: "Failed to fetch stream history" });
   }
 });
 
@@ -182,11 +205,13 @@ app.post("/history/stream", upload.none(), async (req, res) => {
     const {
       tmdbId,
       title,
+      imdbId,
       watchedAt,
       streamType,
       episode,
       posterUrl,
       progress,
+      season,
       token,
       duration,
       backDropUrl,
@@ -232,6 +257,7 @@ app.post("/history/stream", upload.none(), async (req, res) => {
     const query = {
       userId: user.id,
       tmdbId,
+      imdbId,
       ...(streamType === "tv" ? { episode } : {}),
     };
 
@@ -245,7 +271,10 @@ app.post("/history/stream", upload.none(), async (req, res) => {
       watchedAt: watchedAt || new Date(),
     };
 
-    if (streamType === "tv") updateData.episode = episode;
+    if (streamType === "tv") {
+      updateData.episode = episode;
+      updateData.season = season;
+    }
 
     const history = await StreamHistory.findOneAndUpdate(query, updateData, {
       new: true,
@@ -266,6 +295,7 @@ app.patch("/history/stream", async (req, res) => {
       tmdbId,
       title,
       watchedAt,
+      imdbId,
       streamType,
       episode,
       posterUrl,
@@ -305,6 +335,7 @@ app.patch("/history/stream", async (req, res) => {
     const query = {
       userId: user.id,
       tmdbId,
+      imdbId,
       ...(streamType === "tv" ? { episode } : {}),
     };
 
