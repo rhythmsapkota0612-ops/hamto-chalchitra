@@ -10,6 +10,7 @@ const User = require("./models/user");
 const authenticateToken = require("./middlewares/authenticate");
 const StreamHistory = require("./models/streamHistory");
 const multer = require("multer");
+const puppeteer = require("puppeteer")
 
 // Configure multer for handling FormData
 const upload = multer();
@@ -37,6 +38,45 @@ mongoose
   })
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
+
+
+
+
+//Testing
+
+// Node.js (Express example)
+app.get('/api/getlink', async (req, res) => {
+  const { CHID } = req.query;
+  const response = await fetch(`https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`);
+  const data = await response.text();
+  console.log(data)
+  res.send(data);
+
+});
+
+
+app.get('/fetch-html', async (req, res) => {
+  const targetUrl = "https://www.techjail.net/aamshd/v9x9/";
+
+  if (!targetUrl) {
+    return res.status(400).send('Missing "url" query parameter');
+  }
+
+  try {
+    const browser = await puppeteer.launch({ headless: true });
+    const page = await browser.newPage();
+
+    await page.goto(targetUrl, { waitUntil: 'networkidle2' });
+    const html = await page.content();
+
+    await browser.close();
+
+    res.send(html);
+  } catch (error) {
+    console.error('Error fetching HTML:', error);
+    res.status(500).send('Failed to fetch HTML');
+  }
+});
 
 // Register route
 app.post("/auth/register", async (req, res) => {
@@ -121,7 +161,7 @@ app.get("/history/stream", authenticateToken, async (req, res) => {
     const { streamType, isCompleted } = req.query;
     const userId =
       typeof req.user.id === "string" &&
-      mongoose.Types.ObjectId.isValid(req.user.id)
+        mongoose.Types.ObjectId.isValid(req.user.id)
         ? new mongoose.Types.ObjectId(req.user.id)
         : undefined;
 
