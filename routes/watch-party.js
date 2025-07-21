@@ -27,7 +27,7 @@ router.post("/stream", async (req, res) => {
     "Origin: https://nettv.com.np",
     "Accept: */*",
     "Accept-Language: en-US,en;q=0.9",
-  ].join("\r\n");
+  ].join("\\r\\n");
 
   const cmd = `ffmpeg -re -headers "${headers}" -i "${inputUrl}" -c copy -f hls -hls_time 4 -hls_list_size 6 -hls_flags delete_segments+omit_endlist "${outputPlaylist}"`;
 

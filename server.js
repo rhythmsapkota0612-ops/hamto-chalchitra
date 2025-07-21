@@ -24,6 +24,7 @@ const PORT = 3001;
 
 app.use(cors());
 app.use(express.json());
+app.set('trust proxy', true);
 
 // JWT Secret (in production, use environment variable)
 const JWT_SECRET =
