@@ -19,21 +19,27 @@ router.post("/stream", async (req, res) => {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const outputPlaylist = path.join(outputDir, "playlist.m3u8");
+
+  // Correctly formatted headers string (CRLF-separated)
   const headers = [
     "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Referer: https://nettv.com.np/",
+    "Origin: https://nettv.com.np",
     "Accept: */*",
     "Accept-Language: en-US,en;q=0.9",
-    "Origin: https://nettv.com.np",
-    // optionally, include this if stream requires it:
-    // 'Cookie: YOUR_SESSION_COOKIES',
-  ];
+  ].join("\r\n");
 
-  const cmd = `ffmpeg -re -headers "${headers.join(
-    "\\r\\n"
-  )}" -i "${inputUrl}" -c copy -f hls -hls_time 4 -hls_list_size 6 -hls_flags delete_segments+omit_endlist "${outputPlaylist}"`;
-  exec(cmd, (err) => {
-    if (err) console.error(`[FFmpeg Error]`, err);
+  const cmd = `ffmpeg -re -headers "${headers}" -i "${inputUrl}" -c copy -f hls -hls_time 4 -hls_list_size 6 -hls_flags delete_segments+omit_endlist "${outputPlaylist}"`;
+
+  console.log("Running FFmpeg Command:\n", cmd);
+
+  exec(cmd, (err, stdout, stderr) => {
+    if (err) {
+      console.error(`[FFmpeg Error]`, err);
+      console.error(`[FFmpeg STDERR]`, stderr);
+    } else {
+      console.log(`[FFmpeg STDOUT]`, stdout);
+    }
   });
 
   return res.json({
