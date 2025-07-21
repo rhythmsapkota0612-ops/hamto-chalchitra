@@ -46,7 +46,7 @@ router.post("/stream", async (req, res) => {
     success: true,
     partyId,
     streamUrl: `/live/${partyId}/playlist.m3u8`,
-    fullStreamUrl: `${req.protocol}s://${req.get(
+    fullStreamUrl: `${req.protocol}://${req.get(
       "host"
     )}/live/${partyId}/playlist.m3u8`,
   });
