@@ -434,42 +434,29 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
 });
 
 // 🎬 MOVIES
+
 app.get("/proxy/hydra", async (req, res) => {
   const { t, i } = req.query;
-
-  if (!t) {
-    return res
-      .status(400)
-      .json({ success: false, error: "Missing TMDB ID (?t=)" });
-  }
+  if (!t) return res.status(400).json({ success: false, error: "Missing TMDB ID (?t=)" });
 
   try {
-    const hydraUrl = `https://hydrahd.sh/ajax/mov_0.php?i=${i}&t=${t}`;
+    const browser = await puppeteer.launch({ headless: true });
+    const page = await browser.newPage();
 
-    const response = await fetch(hydraUrl, {
-      method: "GET",
-      headers: {
-        accept: "*/*",
-        "accept-language": "en-US,en;q=0.7",
-        priority: "u=1, i",
-        referer: "https://hydrahd.sh/movie/194010-watch-the-old-guard-2-2025-online",
-        "sec-ch-ua":
-          '"Not)A;Brand";v="8", "Chromium";v="138", "Brave";v="138"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-        "sec-gpc": "1",
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-        "x-requested-with": "XMLHttpRequest",
-        cookie:
-          "PHPSESSID=54bb4mknsko7mc1sl5dnbuvvm3; cf_clearance=BgO5vYrbsklUiGv3pOsBDQ0IoTtObUMBCqb8YpnK6NI-1753123027-1.2.1.1-KFyfVRS6k7gfuHcu1VF_mvx8OxQMWqbuqwBWMNatf_9NSSOQIogbEn2hjTkGTS.2lZYUZpO4bpaoefDwsub0ZfT8d.dWB_XS.M9g4U54lLZ1NiwTPZxqnsAF.Ojdcn3gJMRPkGypF3SUoFkBXgDr5_B6N2pfOVY6eDdqJg1Dq8LiErWH.Lj7lsbc2aTTh8cRzGu_yB.jfhkho.GKEN2utzS6Qm2s21PUhnkF2Pehaho",
-      },
-    });
+    // Go to the main movie page first to get cookies & session
+    const movieUrl = "https://hydrahd.sh/movie/194010-watch-the-old-guard-2-2025-online";
+    await page.goto(movieUrl, { waitUntil: "networkidle2" });
 
-    const html = await response.text();
+    // Evaluate fetch within the page context to get the API content
+    const html = await page.evaluate(async (i, t) => {
+      const response = await fetch(`/ajax/mov_0.php?i=${i}&t=${t}`, {
+        headers: { "X-Requested-With": "XMLHttpRequest" }
+      });
+      return await response.text();
+    }, i, t);
+
+    await browser.close();
+
     res.setHeader("Content-Type", "text/html");
     return res.status(200).send(html);
   } catch (error) {
