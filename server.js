@@ -450,22 +450,22 @@ app.get("/proxy/hydra", async (req, res) => {
       method: "GET",
       headers: {
         accept: "*/*",
-        "accept-language": "en-US,en;q=0.9",
+        "accept-language": "en-US,en;q=0.7",
         priority: "u=1, i",
-        referer:
-          "https://hydrahd.sh/movie/194010-watch-the-old-guard-2-2025-online",
+        referer: "https://hydrahd.sh/movie/194010-watch-the-old-guard-2-2025-online",
         "sec-ch-ua":
-          '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+          '"Not)A;Brand";v="8", "Chromium";v="138", "Brave";v="138"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
+        "sec-gpc": "1",
         "user-agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
         "x-requested-with": "XMLHttpRequest",
         cookie:
-          "PHPSESSID=d780bd3jul80hqn0uhsbfj5j02; _ga=GA1.1.2122661879.1751959599; _ym_uid=1751959600970057947; _ym_d=1751959600; _ym_isad=2; _ga_FSSR5RWVV3=GS2.1.s1751959598$o1$g1$t1751959946$j60$l0$h0; prefetchAd_9258380=true",
+          "PHPSESSID=54bb4mknsko7mc1sl5dnbuvvm3; cf_clearance=BgO5vYrbsklUiGv3pOsBDQ0IoTtObUMBCqb8YpnK6NI-1753123027-1.2.1.1-KFyfVRS6k7gfuHcu1VF_mvx8OxQMWqbuqwBWMNatf_9NSSOQIogbEn2hjTkGTS.2lZYUZpO4bpaoefDwsub0ZfT8d.dWB_XS.M9g4U54lLZ1NiwTPZxqnsAF.Ojdcn3gJMRPkGypF3SUoFkBXgDr5_B6N2pfOVY6eDdqJg1Dq8LiErWH.Lj7lsbc2aTTh8cRzGu_yB.jfhkho.GKEN2utzS6Qm2s21PUhnkF2Pehaho",
       },
     });
 
@@ -480,6 +480,7 @@ app.get("/proxy/hydra", async (req, res) => {
     });
   }
 });
+
 
 // 📺 TV SERIES
 app.get("/proxy/hydra-tv", async (req, res) => {
@@ -499,21 +500,22 @@ app.get("/proxy/hydra-tv", async (req, res) => {
       method: "GET",
       headers: {
         accept: "*/*",
-        "accept-language": "en-US,en;q=0.9",
+        "accept-language": "en-US,en;q=0.7",
         priority: "u=1, i",
-        referer: `https://hydrahd.sh/watchseries/squid-game-online-free/season/${s}/episode/${e}`,
+        referer: `https://hydrahd.sh/watchseries/untamed-online-free/season/${s}/episode/${e}`,
         "sec-ch-ua":
-          '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+          '"Not)A;Brand";v="8", "Chromium";v="138", "Brave";v="138"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
+        "sec-gpc": "1",
         "user-agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
         "x-requested-with": "XMLHttpRequest",
         cookie:
-          "PHPSESSID=d780bd3jul80hqn0uhsbfj5j02; _ga=GA1.1.2122661879.1751959599; _ym_uid=1751959600970057947; _ym_d=1751959600; _ym_isad=2; prefetchAd_9258380=true; _ga_FSSR5RWVV3=GS2.1.s1751968571$o2$g1$t1751969421$j50$l0$h0",
+          "PHPSESSID=54bb4mknsko7mc1sl5dnbuvvm3; cf_clearance=BgO5vYrbsklUiGv3pOsBDQ0IoTtObUMBCqb8YpnK6NI-1753123027-1.2.1.1-KFyfVRS6k7gfuHcu1VF_mvx8OxQMWqbuqwBWMNatf_9NSSOQIogbEn2hjTkGTS.2lZYUZpO4bpaoefDwsub0ZfT8d.dWB_XS.M9g4U54lLZ1NiwTPZxqnsAF.Ojdcn3gJMRPkGypF3SUoFkBXgDr5_B6N2pfOVY6eDdqJg1Dq8LiErWH.Lj7lsbc2aTTh8cRzGu_yB.jfhkho.GKEN2utzS6Qm2s21PUhnkF2Pehaho",
       },
     });
 
@@ -528,6 +530,7 @@ app.get("/proxy/hydra-tv", async (req, res) => {
     });
   }
 });
+
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Proxy server running at http://localhost:${PORT}`);
