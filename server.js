@@ -444,7 +444,7 @@ app.get("/proxy/hydra", async (req, res) => {
   }
 
   try {
-    const hydraUrl = `https://hydrahd.sh/ajax/mov_0.php?i=${i}t=${t}`;
+    const hydraUrl = `https://hydrahd.sh/ajax/mov_0.php?i=${i}&t=${t}`;
 
     const response = await fetch(hydraUrl, {
       method: "GET",
@@ -493,7 +493,7 @@ app.get("/proxy/hydra-tv", async (req, res) => {
   }
 
   try {
-    const url = `https://hydrahd.sh/ajax/tv_0.php?i=${i}&t=${t}&s=${s}&e=${e}`;
+    const url = `https://hydrahd.sh/ajax/auto_tv.php?i=${i}&t=${t}&s=${s}&e=${e}`;
 
     const response = await fetch(url, {
       method: "GET",
