@@ -77,6 +77,12 @@ app.get('/fetch-html', async (req, res) => {
     res.status(500).send('Failed to fetch HTML');
   }
 });
+// Add near the top
+const watchPartyRoutes = require("./routes/watch-party");
+
+// After app.use(cors())
+app.use("/watchparty", watchPartyRoutes);
+app.use("/live", express.static(path.join(__dirname, "public", "live")));
 
 // Register route
 app.post("/auth/register", async (req, res) => {
