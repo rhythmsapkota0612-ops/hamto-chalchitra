@@ -71,3 +71,5 @@ package-lock.json
 
 
 public/live
+
+/streams/

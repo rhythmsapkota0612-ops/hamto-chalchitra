@@ -10,10 +10,12 @@ const User = require("./models/user");
 const authenticateToken = require("./middlewares/authenticate");
 const StreamHistory = require("./models/streamHistory");
 const multer = require("multer");
-const puppeteer = require("puppeteer")
+const puppeteer = require("puppeteer");
 
 // Configure multer for handling FormData
 const upload = multer();
+
+const uploadV2 = multer({ dest: "tmp/" });
 
 // Import node-fetch for CommonJS
 const fetch = (...args) =>
@@ -24,7 +26,7 @@ const PORT = 3001;
 
 app.use(cors());
 app.use(express.json());
-app.set('trust proxy', true);
+// app.set('trust proxy', true);
 
 // JWT Secret (in production, use environment variable)
 const JWT_SECRET =
@@ -40,23 +42,84 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-
-
-
 //Testing
 
 // Node.js (Express example)
-app.get('/api/getlink', async (req, res) => {
+app.get("/api/getlink", async (req, res) => {
   const { CHID } = req.query;
-  const response = await fetch(`https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`);
+  const response = await fetch(
+    `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
+  );
   const data = await response.text();
-  console.log(data)
+  console.log(data);
   res.send(data);
-
 });
 
+app.post("/api/upload-chunk", uploadV2.single("file"), (req, res) => {
+  const { streamId, fileName } = req.body;
+  const tempPath = req.file?.path;
 
-app.get('/fetch-html', async (req, res) => {
+  if (!streamId || !fileName || !tempPath) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing streamId, fileName, or file" });
+  }
+
+  const streamDir = path.join(__dirname, "streams", streamId);
+  if (!fs.existsSync(streamDir)) {
+    fs.mkdirSync(streamDir, { recursive: true });
+  }
+
+  const finalPath = path.join(streamDir, fileName);
+
+  fs.rename(tempPath, finalPath, async (err) => {
+    if (err) {
+      console.error("❌ Error saving chunk:", err);
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to save file" });
+    }
+
+    console.log(`✅ Saved: /streams/${streamId}/${fileName}`);
+
+    // 🔁 CLEANUP: Delete old .ts files if more than 10 (excluding playlist.m3u8)
+    try {
+      const files = fs
+        .readdirSync(streamDir)
+        .filter((file) => file.endsWith(".ts"))
+        .map((file) => ({
+          name: file,
+          time: fs.statSync(path.join(streamDir, file)).mtime.getTime(),
+        }))
+        .sort((a, b) => a.time - b.time); // oldest first
+
+      const maxChunks = 10;
+      if (files.length > maxChunks) {
+        const toDelete = files.slice(0, files.length - maxChunks);
+        for (const file of toDelete) {
+          const filePath = path.join(streamDir, file.name);
+          fs.unlinkSync(filePath);
+          console.log(`🗑️ Deleted old chunk: ${file.name}`);
+        }
+      }
+    } catch (cleanupErr) {
+      console.warn("⚠️ Cleanup error:", cleanupErr.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      streamUrl: `${req.protocol}://${req.get(
+        "host"
+      )}/streams/${streamId}/stream.m3u8`,
+    });
+  });
+});
+
+app.use("/streams", express.static(path.join(__dirname, "streams")));
+
+app.get("/api/ping", (req, res) => res.send("pong"));
+
+app.get("/fetch-html", async (req, res) => {
   const targetUrl = "https://www.techjail.net/aamshd/v9x9/";
 
   if (!targetUrl) {
@@ -67,15 +130,15 @@ app.get('/fetch-html', async (req, res) => {
     const browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
 
-    await page.goto(targetUrl, { waitUntil: 'networkidle2' });
+    await page.goto(targetUrl, { waitUntil: "networkidle2" });
     const html = await page.content();
 
     await browser.close();
 
     res.send(html);
   } catch (error) {
-    console.error('Error fetching HTML:', error);
-    res.status(500).send('Failed to fetch HTML');
+    console.error("Error fetching HTML:", error);
+    res.status(500).send("Failed to fetch HTML");
   }
 });
 // Add near the top
@@ -168,7 +231,7 @@ app.get("/history/stream", authenticateToken, async (req, res) => {
     const { streamType, isCompleted } = req.query;
     const userId =
       typeof req.user.id === "string" &&
-        mongoose.Types.ObjectId.isValid(req.user.id)
+      mongoose.Types.ObjectId.isValid(req.user.id)
         ? new mongoose.Types.ObjectId(req.user.id)
         : undefined;
 
