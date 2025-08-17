@@ -1,17 +1,25 @@
 const jwt = require("jsonwebtoken");
-const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret";
+const User = require("../models/user");
 
-const authenticateToken = (req, res, next) => {
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
-
   if (!token) return res.sendStatus(401);
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id);
+    if (!user) return res.sendStatus(403);
+    
+    req.user = {
+      id: user._id,
+      username: user.username,
+      role: user.role,
+    };
     next();
-  });
+  } catch (err) {
+    return res.sendStatus(403);
+  }
 };
 
 module.exports = authenticateToken;
