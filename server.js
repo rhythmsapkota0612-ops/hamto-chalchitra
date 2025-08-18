@@ -113,6 +113,19 @@ app.get("/api/getlink", authenticateToken, requireRole("user", "superadmin", "ad
       const dataa = await responsee.text();
       return res.send(dataa);
     }
+
+
+    if (req?.user?.role === "admin") {
+
+      if (req?.user?.role !== user?.role && user?.role !== "admin") {
+        return res.status(403).json({ success: false, redirect: true, error: "Session Mismatched!!", reditectTo: "/session-mismatched" });
+      }
+      const responsee = await fetch(
+        `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
+      );
+      const dataa = await responsee.text();
+      return res.send(dataa);
+    }
     const session = await TVAccessSession.findOne({ userId: req.user.id });
 
     if (!session || session.expiresAt < new Date()) {
@@ -678,7 +691,7 @@ app.get("/tv/access-status", authenticateToken, requireRole("user", "admin", "su
   if (req?.user?.role === "superadmin") {
     return res.json({ success: true, status: "approved", expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) });
   }
-    if (req?.user?.role === "admin") {
+  if (req?.user?.role === "admin") {
     return res.json({ success: true, status: "approved", expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) });
   }
   const session = await TVAccessSession.findOne({ userId: req.user.id });
