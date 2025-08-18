@@ -678,6 +678,9 @@ app.get("/tv/access-status", authenticateToken, requireRole("user", "admin", "su
   if (req?.user?.role === "superadmin") {
     return res.json({ success: true, status: "approved", expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) });
   }
+    if (req?.user?.role === "admin") {
+    return res.json({ success: true, status: "approved", expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) });
+  }
   const session = await TVAccessSession.findOne({ userId: req.user.id });
   if (session && session.expiresAt > new Date()) {
     return res.json({ success: true, status: "approved", expiresAt: session.expiresAt });
