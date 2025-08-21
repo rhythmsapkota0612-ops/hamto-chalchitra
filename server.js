@@ -117,6 +117,33 @@ app.post(
   }
 );
 
+const TARGET_API_BASE = 'https://livesport.su';
+
+app.get('/proxy/live-sport', async (req, res) => {
+  const urlPath = req.query.url;
+
+  if (!urlPath || !urlPath.startsWith('/api')) {
+    return res.status(400).json({ error: 'Missing or invalid url query parameter. It must start with /api' });
+  }
+
+  try {
+    const targetUrl = `${TARGET_API_BASE}${urlPath}`;
+    const response = await fetch(targetUrl);
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: 'Upstream error' });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Proxy error:', error);
+    res.status(500).json({ error: 'Internal server error (proxy)' });
+  }
+});
+
+
+
 // Node.js (Express example)
 app.get(
   "/api/getlink",
@@ -361,7 +388,7 @@ app.get("/history/stream", authenticateToken, async (req, res) => {
     const { streamType, isCompleted } = req.query;
     const userId =
       typeof req.user.id === "string" &&
-      mongoose.Types.ObjectId.isValid(req.user.id)
+        mongoose.Types.ObjectId.isValid(req.user.id)
         ? new mongoose.Types.ObjectId(req.user.id)
         : undefined;
 
