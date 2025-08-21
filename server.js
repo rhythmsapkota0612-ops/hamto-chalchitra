@@ -12,7 +12,6 @@ const StreamHistory = require("./models/streamHistory");
 const multer = require("multer");
 const puppeteer = require("puppeteer");
 
-
 const TVAccessRequest = require("./models/tvAccess");
 const TVAccessSession = require("./models/tvAccessSession");
 const requireRole = require("./middlewares/roles");
@@ -49,98 +48,141 @@ mongoose
 
 //Testing
 
-app.get("/admin/requests", authenticateToken, requireRole("admin", "superadmin"), async (req, res) => {
-  const requests = await TVAccessRequest.find({ status: "pending" }).populate("userId", "username email fullName");
-  res.json({ success: true, requests });
-});
-
-
-app.post("/admin/handle-request/:requestId", authenticateToken, requireRole("admin", "superadmin"), async (req, res) => {
-  const { approve, message } = req.body;
-  const request = await TVAccessRequest.findById(req.params.requestId);
-
-  if (!request) return res.status(404).json({ success: false, error: "Request not found" });
-  if (request.status !== "pending") return res.status(400).json({ success: false, error: "Already handled" });
-
-  request.status = approve ? "approved" : "rejected";
-  request.messageFromAdmin = message || "";
-  await request.save();
-
-  if (approve) {
-    const expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000); // 3 hrs
-    const session = new TVAccessSession({ userId: request.userId, expiresAt });
-    await session.save();
+app.get(
+  "/admin/requests",
+  authenticateToken,
+  requireRole("admin", "superadmin"),
+  async (req, res) => {
+    const requests = await TVAccessRequest.find({ status: "pending" }).populate(
+      "userId",
+      "username email fullName"
+    );
+    res.json({ success: true, requests });
   }
+);
 
-  res.json({ success: true, message: `Request ${approve ? "approved" : "rejected"}` });
-});
+app.post(
+  "/admin/handle-request/:requestId",
+  authenticateToken,
+  requireRole("admin", "superadmin"),
+  async (req, res) => {
+    const { approve, message } = req.body;
+    const request = await TVAccessRequest.findById(req.params.requestId);
 
+    if (!request)
+      return res
+        .status(404)
+        .json({ success: false, error: "Request not found" });
+    if (request.status !== "pending")
+      return res.status(400).json({ success: false, error: "Already handled" });
 
+    request.status = approve ? "approved" : "rejected";
+    request.messageFromAdmin = message || "";
+    await request.save();
 
+    if (approve) {
+      const expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000); // 3 hrs
+      const session = new TVAccessSession({
+        userId: request.userId,
+        expiresAt,
+      });
+      await session.save();
+    }
 
+    res.json({
+      success: true,
+      message: `Request ${approve ? "approved" : "rejected"}`,
+    });
+  }
+);
 
-app.post("/admin/request-verification/:requestId", authenticateToken, requireRole("superadmin"), async (req, res) => {
-  const { message } = req.body;
-  const request = await TVAccessRequest.findById(req.params.requestId);
+app.post(
+  "/admin/request-verification/:requestId",
+  authenticateToken,
+  requireRole("superadmin"),
+  async (req, res) => {
+    const { message } = req.body;
+    const request = await TVAccessRequest.findById(req.params.requestId);
 
-  if (!request) return res.status(404).json({ success: false, error: "Request not found" });
+    if (!request)
+      return res
+        .status(404)
+        .json({ success: false, error: "Request not found" });
 
-  request.status = "verification";
-  request.messageFromAdmin = message || "Need additional verification";
-  await request.save();
+    request.status = "verification";
+    request.messageFromAdmin = message || "Need additional verification";
+    await request.save();
 
-  res.json({ success: true, message: "Verification requested from user" });
-});
-
+    res.json({ success: true, message: "Verification requested from user" });
+  }
+);
 
 // Node.js (Express example)
-app.get("/api/getlink", authenticateToken, requireRole("user", "superadmin", "admin"), async (req, res) => {
-  const { CHID } = req.query;
-  try {
-    const user = await User.findById(req.user.id);
-    if (!user)
-      return res.status(404).json({ success: false, error: "User not found" });
+app.get(
+  "/api/getlink",
+  authenticateToken,
+  requireRole("user", "superadmin", "admin"),
+  async (req, res) => {
+    const { CHID } = req.query;
+    try {
+      const user = await User.findById(req.user.id);
+      if (!user)
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
 
-
-    if (req?.user?.role === "superadmin") {
-
-      if (req?.user?.role !== user?.role && user?.role !== "superadmin") {
-        return res.status(403).json({ success: false, redirect: true, error: "Session Mismatched!!", reditectTo: "/session-mismatched" });
+      if (req?.user?.role === "superadmin") {
+        if (req?.user?.role !== user?.role && user?.role !== "superadmin") {
+          return res
+            .status(403)
+            .json({
+              success: false,
+              redirect: true,
+              error: "Session Mismatched!!",
+              reditectTo: "/session-mismatched",
+            });
+        }
+        const responsee = await fetch(
+          `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
+        );
+        const dataa = await responsee.text();
+        return res.send(dataa);
       }
-      const responsee = await fetch(
+
+      if (req?.user?.role === "admin") {
+        if (req?.user?.role !== user?.role && user?.role !== "admin") {
+          return res
+            .status(403)
+            .json({
+              success: false,
+              redirect: true,
+              error: "Session Mismatched!!",
+              reditectTo: "/session-mismatched",
+            });
+        }
+        const responsee = await fetch(
+          `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
+        );
+        const dataa = await responsee.text();
+        return res.send(dataa);
+      }
+      const session = await TVAccessSession.findOne({ userId: req.user.id });
+
+      if (!session || session.expiresAt < new Date()) {
+        return res
+          .status(403)
+          .json({ success: false, error: "TV access expired or not granted" });
+      }
+      const response = await fetch(
         `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
       );
-      const dataa = await responsee.text();
-      return res.send(dataa);
+      const data = await response.text();
+      res.send(data);
+    } catch (err) {
+      res.status(500).json({ success: false, error: "Failed to fetch user" });
     }
-
-
-    if (req?.user?.role === "admin") {
-
-      if (req?.user?.role !== user?.role && user?.role !== "admin") {
-        return res.status(403).json({ success: false, redirect: true, error: "Session Mismatched!!", reditectTo: "/session-mismatched" });
-      }
-      const responsee = await fetch(
-        `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
-      );
-      const dataa = await responsee.text();
-      return res.send(dataa);
-    }
-    const session = await TVAccessSession.findOne({ userId: req.user.id });
-
-    if (!session || session.expiresAt < new Date()) {
-      return res.status(403).json({ success: false, error: "TV access expired or not granted" });
-    }
-    const response = await fetch(
-      `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
-    );
-    const data = await response.text();
-    res.send(data);
-
-  } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to fetch user" });
   }
-});
+);
 
 app.post("/api/upload-chunk", uploadV2.single("file"), (req, res) => {
   const { streamId, fileName } = req.body;
@@ -305,7 +347,7 @@ app.post("/auth/login", async (req, res) => {
         username: user.username,
         email: user.email,
         fullName: user?.fullName,
-        role: user?.role
+        role: user?.role,
       },
     });
   } catch (err) {
@@ -319,7 +361,7 @@ app.get("/history/stream", authenticateToken, async (req, res) => {
     const { streamType, isCompleted } = req.query;
     const userId =
       typeof req.user.id === "string" &&
-        mongoose.Types.ObjectId.isValid(req.user.id)
+      mongoose.Types.ObjectId.isValid(req.user.id)
         ? new mongoose.Types.ObjectId(req.user.id)
         : undefined;
 
@@ -589,23 +631,31 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
 
 app.get("/proxy/hydra", async (req, res) => {
   const { t, i } = req.query;
-  if (!t) return res.status(400).json({ success: false, error: "Missing TMDB ID (?t=)" });
+  if (!t)
+    return res
+      .status(400)
+      .json({ success: false, error: "Missing TMDB ID (?t=)" });
 
   try {
     const browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
 
     // Go to the main movie page first to get cookies & session
-    const movieUrl = "https://hydrahd.sh/movie/194010-watch-the-old-guard-2-2025-online";
+    const movieUrl =
+      "https://hydrahd.sh/movie/194010-watch-the-old-guard-2-2025-online";
     await page.goto(movieUrl, { waitUntil: "networkidle2" });
 
     // Evaluate fetch within the page context to get the API content
-    const html = await page.evaluate(async (i, t) => {
-      const response = await fetch(`/ajax/mov_0.php?i=${i}&t=${t}`, {
-        headers: { "X-Requested-With": "XMLHttpRequest" }
-      });
-      return await response.text();
-    }, i, t);
+    const html = await page.evaluate(
+      async (i, t) => {
+        const response = await fetch(`/ajax/mov_0.php?i=${i}&t=${t}`, {
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        });
+        return await response.text();
+      },
+      i,
+      t
+    );
 
     await browser.close();
 
@@ -620,6 +670,55 @@ app.get("/proxy/hydra", async (req, res) => {
   }
 });
 
+app.use("/api/mal", async (req, res) => {
+  try {
+    // Build upstream URL (keeps path + query string)
+    const upstream =
+      "https://api.myanimelist.net/v2" +
+      req.originalUrl.replace(/^\/api\/mal/, "");
+
+    // Forward method/body and add the required MAL header
+    const resp = await fetch(upstream, {
+      method: req.method,
+      headers: {
+        "X-MAL-CLIENT-ID": process.env.MAL_CLIENT_ID, // set in your env
+        Accept: req.get("accept") || "application/json",
+        // forward content-type only when present
+        ...(req.get("content-type")
+          ? { "Content-Type": req.get("content-type") }
+          : {}),
+      },
+      body: ["GET", "HEAD"].includes(req.method)
+        ? undefined
+        : req.body && JSON.stringify(req.body),
+    });
+
+    // Pass through useful headers
+    res.status(resp.status);
+    for (const [k, v] of resp.headers.entries()) {
+      if (
+        [
+          "content-type",
+          "cache-control",
+          "expires",
+          "last-modified",
+          "etag",
+        ].includes(k.toLowerCase())
+      ) {
+        res.setHeader(k, v);
+      }
+    }
+
+    const text = await resp.text();
+    res.send(text);
+  } catch (err) {
+    console.error(err);
+    res.status(502).json({ error: "Upstream fetch failed" });
+  }
+});
+
+// Handle CORS preflight explicitly (optional, helps with some setups)
+// app.options("/api/mal/*", cors());
 
 // 📺 TV SERIES
 app.get("/proxy/hydra-tv", async (req, res) => {
@@ -642,8 +741,7 @@ app.get("/proxy/hydra-tv", async (req, res) => {
         "accept-language": "en-US,en;q=0.7",
         priority: "u=1, i",
         referer: `https://hydrahd.sh/watchseries/untamed-online-free/season/${s}/episode/${e}`,
-        "sec-ch-ua":
-          '"Not)A;Brand";v="8", "Chromium";v="138", "Brave";v="138"',
+        "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Brave";v="138"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "empty",
@@ -670,48 +768,75 @@ app.get("/proxy/hydra-tv", async (req, res) => {
   }
 });
 
-app.post("/tv/request-access", authenticateToken, requireRole("user"), async (req, res) => {
-  const existingRequest = await TVAccessRequest.findOne({ userId: req.user.id, status: "pending" });
-  if (existingRequest) return res.status(400).json({ success: false, error: "You already have a pending request" });
+app.post(
+  "/tv/request-access",
+  authenticateToken,
+  requireRole("user"),
+  async (req, res) => {
+    const existingRequest = await TVAccessRequest.findOne({
+      userId: req.user.id,
+      status: "pending",
+    });
+    if (existingRequest)
+      return res
+        .status(400)
+        .json({ success: false, error: "You already have a pending request" });
 
-  const expiresAt = new Date(Date.now() + 60 * 1000); // 1 min
+    const expiresAt = new Date(Date.now() + 60 * 1000); // 1 min
 
-  const request = new TVAccessRequest({
-    userId: req.user.id,
-    reason: req.body.reason || "",
-    expiresAt,
-  });
+    const request = new TVAccessRequest({
+      userId: req.user.id,
+      reason: req.body.reason || "",
+      expiresAt,
+    });
 
-  await request.save();
-  res.json({ success: true, message: "Request submitted" });
-});
-
-
-app.get("/tv/access-status", authenticateToken, requireRole("user", "admin", "superadmin"), async (req, res) => {
-  if (req?.user?.role === "superadmin") {
-    return res.json({ success: true, status: "approved", expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) });
+    await request.save();
+    res.json({ success: true, message: "Request submitted" });
   }
-  if (req?.user?.role === "admin") {
-    return res.json({ success: true, status: "approved", expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000) });
+);
+
+app.get(
+  "/tv/access-status",
+  authenticateToken,
+  requireRole("user", "admin", "superadmin"),
+  async (req, res) => {
+    if (req?.user?.role === "superadmin") {
+      return res.json({
+        success: true,
+        status: "approved",
+        expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000),
+      });
+    }
+    if (req?.user?.role === "admin") {
+      return res.json({
+        success: true,
+        status: "approved",
+        expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000),
+      });
+    }
+    const session = await TVAccessSession.findOne({ userId: req.user.id });
+    if (session && session.expiresAt > new Date()) {
+      return res.json({
+        success: true,
+        status: "approved",
+        expiresAt: session.expiresAt,
+      });
+    }
+
+    const latestRequest = await TVAccessRequest.findOne({
+      userId: req.user.id,
+    }).sort({ createdAt: -1 });
+
+    if (!latestRequest)
+      return res.json({ success: true, status: "no-request" });
+
+    res.json({
+      success: true,
+      status: latestRequest.status,
+      message: latestRequest.messageFromAdmin || null,
+    });
   }
-  const session = await TVAccessSession.findOne({ userId: req.user.id });
-  if (session && session.expiresAt > new Date()) {
-    return res.json({ success: true, status: "approved", expiresAt: session.expiresAt });
-  }
-
-
-  const latestRequest = await TVAccessRequest.findOne({ userId: req.user.id }).sort({ createdAt: -1 });
-
-  if (!latestRequest) return res.json({ success: true, status: "no-request" });
-
-  res.json({
-    success: true,
-    status: latestRequest.status,
-    message: latestRequest.messageFromAdmin || null,
-  });
-});
-
-
+);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Proxy server running at http://localhost:${PORT}`);
