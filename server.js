@@ -117,7 +117,323 @@ app.post(
   }
 );
 
+function isStreamUrl(url) {
+  try {
+    const parsed = new URL(url);
+    // Allow only known safe video domains
+    return !!parsed;
+  } catch {
+    return false;
+  }
+}
+
+
 const TARGET_API_BASE = 'https://livesport.su';
+app.get('/proxy/iframe', async (req, res) => {
+  const targetUrl = decodeURIComponent(req.query.url);
+
+  // Only allow video player URLs
+  if (!isStreamUrl(targetUrl)) {
+    return res.status(403).send('Blocked');
+  }
+
+  // Set CORS headers to allow iframe embedding
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        'Origin': 'https://livesport.su',  // Use the actual origin
+        'Referer': 'https://livesport.su/',
+        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).send(`Error: ${response.status} ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type') || 'text/html';
+    res.setHeader('Content-Type', contentType);
+    
+    // Don't set X-Frame-Options to allow iframe embedding
+    res.removeHeader('X-Frame-Options');
+    
+    let html = await response.text();
+
+    // Remove specific ad-related scripts while preserving video player scripts
+    html = html
+      // Remove scripts containing ad-related keywords
+      .replace(/<script[^>]*>[\s\S]*?(popup|adcash|advertisement|adsystem|googlesyndication|doubleclick|amazon-adsystem|outbrain|taboola|_pop|popunder|redirect)[\s\S]*?<\/script>/gi, '')
+
+      // Remove scripts that contain common ad patterns
+      .replace(/<script[^>]*>[\s\S]*?(window\.open|location\.href\s*=|location\.replace|document\.write.*(?:ad|popup))[\s\S]*?<\/script>/gi, '')
+
+      // Remove external ad scripts by src
+      .replace(/<script[^>]*src=["'][^"']*(?:ads|advertisement|popup|redirect|banner)[^"']*["'][^>]*><\/script>/gi, '')
+ .replace(/<a[^>]*href=["'][^"']*(?:ttonyfiiyajkh)[^"']*["'][^>]*><\/a>/gi, '')
+      // Remove div containers commonly used for ads - but replace with empty divs to prevent JS errors
+      .replace(/<div[^>]*(?:class|id)=["'][^"']*(?:ad|advertisement|popup|banner|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '<div style="display:none;"></div>')
+
+      // Remove inline event handlers that could trigger popups
+      .replace(/on(click|load|mouseover|mouseout|focus|blur)\s*=\s*["'][^"']*(?:window\.open|popup|redirect)[^"']*["']/gi, '')
+
+      // Remove specific popup patterns in inline JS
+      .replace(/onclick\s*=\s*["'][^"']*window\.open[^"']*["']/gi, '')
+
+      // Remove meta refresh redirects
+      .replace(/<meta[^>]*http-equiv=["']refresh["'][^>]*>/gi, '')
+
+      // Remove X-Frame-Options and CSP meta tags that block iframe embedding
+      .replace(/<meta[^>]*http-equiv=["'](X-Frame-Options|Content-Security-Policy)["'][^>]*>/gi, '')
+
+      // Replace common ad container divs with empty divs to prevent JS errors
+      .replace(/<div[^>]*(?:class|id)=["'][^"']*(?:popup|advertisement|modal|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '<div style="display:none;"></div>')
+
+      // Remove noscript tags (often contain ad fallbacks)
+      .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+
+    // Inject script to intercept and proxy all requests + add error handling
+    const proxyScript = `
+      <script>
+        (function() {
+          // Add error handling for missing DOM elements
+          const originalQuerySelector = document.querySelector;
+          const originalQuerySelectorAll = document.querySelectorAll;
+          const originalGetElementById = document.getElementById;
+          const originalGetElementsByClassName = document.getElementsByClassName;
+          
+          // Override querySelector to return dummy elements for ad-related selectors
+          document.querySelector = function(selector) {
+            const result = originalQuerySelector.call(this, selector);
+            if (!result && (selector.includes('ad') || selector.includes('popup') || selector.includes('overlay'))) {
+              // Return a dummy element to prevent null errors
+              const dummyElement = document.createElement('div');
+              dummyElement.style.display = 'none';
+              dummyElement.remove = function() {}; // Prevent errors when trying to remove
+              dummyElement.style.visibility = 'hidden';
+              return dummyElement;
+            }
+            return result;
+          };
+          
+          document.getElementById = function(id) {
+            const result = originalGetElementById.call(this, id);
+            if (!result && (id.includes('ad') || id.includes('popup') || id.includes('overlay'))) {
+              const dummyElement = document.createElement('div');
+              dummyElement.style.display = 'none';
+              dummyElement.remove = function() {};
+              dummyElement.id = id;
+              return dummyElement;
+            }
+            return result;
+          };
+          
+          // Override global error handler to suppress ad-related errors
+          const originalError = window.onerror;
+          window.onerror = function(message, source, lineno, colno, error) {
+            if (message && (
+              message.includes("Cannot read properties of null (reading 'remove')") ||
+              message.includes("Cannot read properties of undefined") ||
+              message.includes("popup") || 
+              message.includes("advertisement")
+            )) {
+              console.log('Suppressed ad-related error:', message);
+              return true; // Prevent error from showing
+            }
+            if (originalError) {
+              return originalError.apply(this, arguments);
+            }
+            return false;
+          };
+          
+          const PROXY_URL = 'http://localhost:3001/proxy/api?url=';
+          const TARGET_DOMAIN = 'livesport.su';
+          
+          // Override fetch to proxy ALL external requests
+          const originalFetch = window.fetch;
+          window.fetch = function(url, options = {}) {
+            const fullUrl = url.startsWith('/') ? 'https://' + TARGET_DOMAIN + url : url;
+            
+            if (fullUrl.includes(TARGET_DOMAIN) || url.startsWith('/api') || url.startsWith('/cdn-cgi')) {
+              console.log('Proxying fetch:', fullUrl);
+              const proxyUrl = PROXY_URL + encodeURIComponent(fullUrl);
+              return originalFetch(proxyUrl, {
+                ...options,
+                mode: 'cors',
+                credentials: 'omit'
+              });
+            }
+            return originalFetch(url, options);
+          };
+
+          // Override XMLHttpRequest completely
+          const OriginalXHR = window.XMLHttpRequest;
+          window.XMLHttpRequest = function() {
+            const xhr = new OriginalXHR();
+            const originalOpen = xhr.open;
+            
+            xhr.open = function(method, url, async = true, user, password) {
+              const fullUrl = url.startsWith('/') ? 'https://' + TARGET_DOMAIN + url : url;
+              
+              if (fullUrl.includes(TARGET_DOMAIN) || url.startsWith('/api') || url.startsWith('/cdn-cgi')) {
+                console.log('Proxying XHR:', fullUrl);
+                const proxyUrl = PROXY_URL + encodeURIComponent(fullUrl);
+                return originalOpen.call(this, method, proxyUrl, async, user, password);
+              }
+              return originalOpen.call(this, method, url, async, user, password);
+            };
+            
+            return xhr;
+          };
+          
+          // Block direct external requests in case any slip through
+          const originalCreateElement = document.createElement;
+          document.createElement = function(tagName) {
+            const element = originalCreateElement.call(this, tagName);
+            
+            if (tagName.toLowerCase() === 'script') {
+              const originalSetAttribute = element.setAttribute;
+              element.setAttribute = function(name, value) {
+                if (name === 'src' && value.includes(TARGET_DOMAIN)) {
+                  console.log('Blocking external script:', value);
+                  return; // Block external scripts
+                }
+                return originalSetAttribute.call(this, name, value);
+              };
+            }
+            
+            return element;
+          };
+          
+          console.log('Proxy interceptors and error handlers installed');
+        })();
+      </script>
+    `;
+
+    // Add CSS to hide common ad elements
+    const adBlockCSS = `
+      <style>
+        /* Hide common ad containers */
+        [class*="ad"], [class*="popup"], [class*="overlay"], [class*="banner"],
+        [id*="ad"], [id*="popup"], [id*="overlay"], [id*="banner"],
+        .advertisement, .popup-overlay, .modal-overlay, .ad-container {
+          display: none !important;
+          visibility: hidden !important;
+        }
+        
+        /* Ensure video containers remain visible */
+        [class*="video"], [class*="player"], [id*="video"], [id*="player"],
+        video, .video-container, .player-container {
+          display: block !important;
+          visibility: visible !important;
+        }
+        
+        /* Hide common popup elements */
+        .popup, .modal, .overlay, .advertisement {
+          display: none !important;
+        }
+      </style>
+    `;
+
+    // Insert proxy script and CSS into head or before closing body tag
+    if (html.includes('</head>')) {
+      html = html.replace('</head>', `${proxyScript}${adBlockCSS}</head>`);
+    } else if (html.includes('<head>')) {
+      html = html.replace('<head>', `<head>${proxyScript}${adBlockCSS}`);
+    } else if (html.includes('</body>')) {
+      html = html.replace('</body>', `${proxyScript}${adBlockCSS}</body>`);
+    } else {
+      html = proxyScript + adBlockCSS + html;
+    }
+
+    res.send(html);
+  } catch (e) {
+    console.error('Proxy error:', e);
+    res.status(500).send('Proxy error: ' + e.message);
+  }
+});
+
+// Handle OPTIONS preflight requests
+app.options('/proxy/iframe', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.status(200).send();
+});
+
+// API proxy route for intercepted requests
+app.all('/proxy/api', async (req, res) => {
+  const targetUrl = decodeURIComponent(req.query.url);
+
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).send();
+  }
+
+  try {
+    const fetchOptions = {
+      method: req.method,
+      headers: {
+        'Origin': 'https://livesport.su',
+        'Referer': 'https://livesport.su/',
+        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': req.headers.accept || 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+      }
+    };
+
+    // Add body for POST requests
+    if (req.method === 'POST' && req.body) {
+      fetchOptions.body = JSON.stringify(req.body);
+      fetchOptions.headers['Content-Type'] = 'application/json';
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `${response.status} ${response.statusText}` });
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/json';
+    res.setHeader('Content-Type', contentType);
+
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      res.json(data);
+    } else {
+      const text = await response.text();
+      res.send(text);
+    }
+
+  } catch (e) {
+    console.error('API Proxy error for', targetUrl, ':', e);
+    res.status(500).json({ error: 'Proxy error: ' + e.message });
+  }
+});
+
+app.options('/proxy/api', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.status(200).send();
+});
+
 
 app.get('/proxy/live-sport', async (req, res) => {
   const urlPath = req.query.url;
