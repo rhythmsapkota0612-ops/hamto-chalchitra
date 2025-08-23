@@ -11,7 +11,8 @@ const authenticateToken = require("./middlewares/authenticate");
 const StreamHistory = require("./models/streamHistory");
 const multer = require("multer");
 const puppeteer = require("puppeteer");
-
+const geoip = require("geoip-lite")
+const countries = require("i18n-iso-countries")
 const TVAccessRequest = require("./models/tvAccess");
 const TVAccessSession = require("./models/tvAccessSession");
 const requireRole = require("./middlewares/roles");
@@ -162,10 +163,10 @@ app.get('/proxy/iframe', async (req, res) => {
 
     const contentType = response.headers.get('content-type') || 'text/html';
     res.setHeader('Content-Type', contentType);
-    
+
     // Don't set X-Frame-Options to allow iframe embedding
     res.removeHeader('X-Frame-Options');
-    
+
     let html = await response.text();
 
     // Remove specific ad-related scripts while preserving video player scripts
@@ -178,7 +179,7 @@ app.get('/proxy/iframe', async (req, res) => {
 
       // Remove external ad scripts by src
       .replace(/<script[^>]*src=["'][^"']*(?:ads|advertisement|popup|redirect|banner)[^"']*["'][^>]*><\/script>/gi, '')
- .replace(/<a[^>]*href=["'][^"']*(?:ttonyfiiyajkh)[^"']*["'][^>]*><\/a>/gi, '')
+      .replace(/<a[^>]*href=["'][^"']*(?:ttonyfiiyajkh)[^"']*["'][^>]*><\/a>/gi, '')
       // Remove div containers commonly used for ads - but replace with empty divs to prevent JS errors
       .replace(/<div[^>]*(?:class|id)=["'][^"']*(?:ad|advertisement|popup|banner|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '<div style="display:none;"></div>')
 
@@ -698,6 +699,14 @@ app.post("/auth/login", async (req, res) => {
     res.status(500).json({ success: false, error: "Login failed" });
   }
 });
+
+app.get("/region", async (req, res) => {
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
+  const geo = geoip.lookup(ip);
+  countries.registerLocale(require("i18n-iso-countries/langs/en.json"));
+  const countryName = countries.getName(geo?.country, "en");
+  return res.status(200).json({ success: true, data: { message: `Successfully configured ip`, data: { ...geo, ip, countryName: countryName } } });
+})
 
 app.get("/history/stream", authenticateToken, async (req, res) => {
   try {
