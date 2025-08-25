@@ -718,9 +718,13 @@ app.post("/auth/register", async (req, res) => {
     }
 
     // (Not used when mandatory, but kept for completeness)
-    const token = jwt.sign({ id: newUser._id, username }, JWT_SECRET, {
-      expiresIn: "30d",
-    });
+    const token = jwt.sign(
+      { id: newUser._id, username, role: newUser?.role },
+      JWT_SECRET,
+      {
+        expiresIn: "30d",
+      }
+    );
     res.json({
       success: true,
       message: "User registered",
@@ -1070,7 +1074,7 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
         },
       });
     }
-    
+
     res.json({
       success: true,
       user: {

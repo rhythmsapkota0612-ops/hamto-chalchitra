@@ -143,7 +143,7 @@ router.post("/verify-setup", requireSetupToken, async (req, res) => {
 
     // Issue FINAL auth token now (already MFA-verified)
     const finalToken = jwt.sign(
-      { id: user._id, username: user.username, mfa: true },
+      { id: user._id, username: user.username, mfa: true, role: user?.role },
       JWT_SECRET,
       { expiresIn: "30d" }
     );
