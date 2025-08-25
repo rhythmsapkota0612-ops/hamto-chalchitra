@@ -1048,6 +1048,29 @@ app.get("/auth/me", authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user)
       return res.status(404).json({ success: false, error: "User not found" });
+
+    if (ENFORCE_2FA && !user.twoFA?.enabled) {
+      // Force them into setup path
+      const mfa_token = jwt.sign(
+        { sub: user._id.toString(), stage: "setup" },
+        JWT_SECRET,
+        { expiresIn: MFA_TOKEN_TTL }
+      );
+      return res.json({
+        success: true,
+        need_2fa_setup: true,
+        message: "2FA is mandatory. Complete setup to continue.",
+        mfa_token,
+        user: {
+          id: user._id,
+          username: user.username,
+          email: user.email,
+          role: user?.role,
+          createdAt: user.createdAt,
+        },
+      });
+    }
+    
     res.json({
       success: true,
       user: {
