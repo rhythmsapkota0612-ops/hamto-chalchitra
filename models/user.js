@@ -7,6 +7,12 @@ const userSchema = new mongoose.Schema({
   role: { type: String, default: "user" },
   createdAt: { type: Date, default: Date.now },
   fullName: { type: String, required: true },
+  twoFA: {
+    enabled: { type: Boolean, default: false },
+    secretEnc: { type: String, default: null },
+    tempSecretEnc: { type: String, default: null },
+    backupCodes: [{ type: String }],
+  },
 });
 
 module.exports = mongoose.model("User", userSchema);

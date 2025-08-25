@@ -11,8 +11,8 @@ const authenticateToken = require("./middlewares/authenticate");
 const StreamHistory = require("./models/streamHistory");
 const multer = require("multer");
 const puppeteer = require("puppeteer");
-const geoip = require("geoip-lite")
-const countries = require("i18n-iso-countries")
+const geoip = require("geoip-lite");
+const countries = require("i18n-iso-countries");
 const TVAccessRequest = require("./models/tvAccess");
 const TVAccessSession = require("./models/tvAccessSession");
 const requireRole = require("./middlewares/roles");
@@ -128,78 +128,117 @@ function isStreamUrl(url) {
   }
 }
 
+const TARGET_API_BASE = "https://livesport.su";
 
-const TARGET_API_BASE = 'https://livesport.su';
-app.get('/proxy/iframe', async (req, res) => {
+// 2FA enforcement flags
+const ENFORCE_2FA = true; // mandatory 2FA
+const MFA_TOKEN_TTL = process.env.MFA_TOKEN_TTL || "5m";
+
+const twoFARoutes = require("./routes/auth-2fa");
+app.use("/auth/2fa", twoFARoutes);
+
+app.get("/proxy/iframe", async (req, res) => {
   const targetUrl = decodeURIComponent(req.query.url);
 
   // Only allow video player URLs
   if (!isStreamUrl(targetUrl)) {
-    return res.status(403).send('Blocked');
+    return res.status(403).send("Blocked");
   }
 
   // Set CORS headers to allow iframe embedding
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   try {
     const response = await fetch(targetUrl, {
       headers: {
-        'Origin': 'https://livesport.su',  // Use the actual origin
-        'Referer': 'https://livesport.su/',
-        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-      }
+        Origin: "https://livesport.su", // Use the actual origin
+        Referer: "https://livesport.su/",
+        "User-Agent":
+          req.headers["user-agent"] ||
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        Connection: "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+      },
     });
 
     if (!response.ok) {
-      return res.status(response.status).send(`Error: ${response.status} ${response.statusText}`);
+      return res
+        .status(response.status)
+        .send(`Error: ${response.status} ${response.statusText}`);
     }
 
-    const contentType = response.headers.get('content-type') || 'text/html';
-    res.setHeader('Content-Type', contentType);
+    const contentType = response.headers.get("content-type") || "text/html";
+    res.setHeader("Content-Type", contentType);
 
     // Don't set X-Frame-Options to allow iframe embedding
-    res.removeHeader('X-Frame-Options');
+    res.removeHeader("X-Frame-Options");
 
     let html = await response.text();
 
     // Remove specific ad-related scripts while preserving video player scripts
     html = html
       // Remove scripts containing ad-related keywords
-      .replace(/<script[^>]*>[\s\S]*?(popup|adcash|advertisement|adsystem|googlesyndication|doubleclick|amazon-adsystem|outbrain|taboola|_pop|popunder|redirect)[\s\S]*?<\/script>/gi, '')
+      .replace(
+        /<script[^>]*>[\s\S]*?(popup|adcash|advertisement|adsystem|googlesyndication|doubleclick|amazon-adsystem|outbrain|taboola|_pop|popunder|redirect)[\s\S]*?<\/script>/gi,
+        ""
+      )
 
       // Remove scripts that contain common ad patterns
-      .replace(/<script[^>]*>[\s\S]*?(window\.open|location\.href\s*=|location\.replace|document\.write.*(?:ad|popup))[\s\S]*?<\/script>/gi, '')
+      .replace(
+        /<script[^>]*>[\s\S]*?(window\.open|location\.href\s*=|location\.replace|document\.write.*(?:ad|popup))[\s\S]*?<\/script>/gi,
+        ""
+      )
 
       // Remove external ad scripts by src
-      .replace(/<script[^>]*src=["'][^"']*(?:ads|advertisement|popup|redirect|banner)[^"']*["'][^>]*><\/script>/gi, '')
-      .replace(/<a[^>]*href=["'][^"']*(?:ttonyfiiyajkh)[^"']*["'][^>]*><\/a>/gi, '')
+      .replace(
+        /<script[^>]*src=["'][^"']*(?:ads|advertisement|popup|redirect|banner)[^"']*["'][^>]*><\/script>/gi,
+        ""
+      )
+      .replace(
+        /<a[^>]*href=["'][^"']*(?:ttonyfiiyajkh)[^"']*["'][^>]*><\/a>/gi,
+        ""
+      )
       // Remove div containers commonly used for ads - but replace with empty divs to prevent JS errors
-      .replace(/<div[^>]*(?:class|id)=["'][^"']*(?:ad|advertisement|popup|banner|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '<div style="display:none;"></div>')
+      .replace(
+        /<div[^>]*(?:class|id)=["'][^"']*(?:ad|advertisement|popup|banner|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi,
+        '<div style="display:none;"></div>'
+      )
 
       // Remove inline event handlers that could trigger popups
-      .replace(/on(click|load|mouseover|mouseout|focus|blur)\s*=\s*["'][^"']*(?:window\.open|popup|redirect)[^"']*["']/gi, '')
+      .replace(
+        /on(click|load|mouseover|mouseout|focus|blur)\s*=\s*["'][^"']*(?:window\.open|popup|redirect)[^"']*["']/gi,
+        ""
+      )
 
       // Remove specific popup patterns in inline JS
-      .replace(/onclick\s*=\s*["'][^"']*window\.open[^"']*["']/gi, '')
+      .replace(/onclick\s*=\s*["'][^"']*window\.open[^"']*["']/gi, "")
 
       // Remove meta refresh redirects
-      .replace(/<meta[^>]*http-equiv=["']refresh["'][^>]*>/gi, '')
+      .replace(/<meta[^>]*http-equiv=["']refresh["'][^>]*>/gi, "")
 
       // Remove X-Frame-Options and CSP meta tags that block iframe embedding
-      .replace(/<meta[^>]*http-equiv=["'](X-Frame-Options|Content-Security-Policy)["'][^>]*>/gi, '')
+      .replace(
+        /<meta[^>]*http-equiv=["'](X-Frame-Options|Content-Security-Policy)["'][^>]*>/gi,
+        ""
+      )
 
       // Replace common ad container divs with empty divs to prevent JS errors
-      .replace(/<div[^>]*(?:class|id)=["'][^"']*(?:popup|advertisement|modal|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '<div style="display:none;"></div>')
+      .replace(
+        /<div[^>]*(?:class|id)=["'][^"']*(?:popup|advertisement|modal|overlay)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi,
+        '<div style="display:none;"></div>'
+      )
 
       // Remove noscript tags (often contain ad fallbacks)
-      .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+      .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
 
     // Inject script to intercept and proxy all requests + add error handling
     const proxyScript = `
@@ -345,41 +384,50 @@ app.get('/proxy/iframe', async (req, res) => {
     `;
 
     // Insert proxy script and CSS into head or before closing body tag
-    if (html.includes('</head>')) {
-      html = html.replace('</head>', `${proxyScript}${adBlockCSS}</head>`);
-    } else if (html.includes('<head>')) {
-      html = html.replace('<head>', `<head>${proxyScript}${adBlockCSS}`);
-    } else if (html.includes('</body>')) {
-      html = html.replace('</body>', `${proxyScript}${adBlockCSS}</body>`);
+    if (html.includes("</head>")) {
+      html = html.replace("</head>", `${proxyScript}${adBlockCSS}</head>`);
+    } else if (html.includes("<head>")) {
+      html = html.replace("<head>", `<head>${proxyScript}${adBlockCSS}`);
+    } else if (html.includes("</body>")) {
+      html = html.replace("</body>", `${proxyScript}${adBlockCSS}</body>`);
     } else {
       html = proxyScript + adBlockCSS + html;
     }
 
     res.send(html);
   } catch (e) {
-    console.error('Proxy error:', e);
-    res.status(500).send('Proxy error: ' + e.message);
+    console.error("Proxy error:", e);
+    res.status(500).send("Proxy error: " + e.message);
   }
 });
 
 // Handle OPTIONS preflight requests
-app.options('/proxy/iframe', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+app.options("/proxy/iframe", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.status(200).send();
 });
 
 // API proxy route for intercepted requests
-app.all('/proxy/api', async (req, res) => {
+app.all("/proxy/api", async (req, res) => {
   const targetUrl = decodeURIComponent(req.query.url);
 
   // Set CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
 
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return res.status(200).send();
   }
 
@@ -387,60 +435,71 @@ app.all('/proxy/api', async (req, res) => {
     const fetchOptions = {
       method: req.method,
       headers: {
-        'Origin': 'https://livesport.su',
-        'Referer': 'https://livesport.su/',
-        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': req.headers.accept || 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-      }
+        Origin: "https://livesport.su",
+        Referer: "https://livesport.su/",
+        "User-Agent":
+          req.headers["user-agent"] ||
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        Accept: req.headers.accept || "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.5",
+        Connection: "keep-alive",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+      },
     };
 
     // Add body for POST requests
-    if (req.method === 'POST' && req.body) {
+    if (req.method === "POST" && req.body) {
       fetchOptions.body = JSON.stringify(req.body);
-      fetchOptions.headers['Content-Type'] = 'application/json';
+      fetchOptions.headers["Content-Type"] = "application/json";
     }
 
     const response = await fetch(targetUrl, fetchOptions);
 
     if (!response.ok) {
-      return res.status(response.status).json({ error: `${response.status} ${response.statusText}` });
+      return res
+        .status(response.status)
+        .json({ error: `${response.status} ${response.statusText}` });
     }
 
-    const contentType = response.headers.get('content-type') || 'application/json';
-    res.setHeader('Content-Type', contentType);
+    const contentType =
+      response.headers.get("content-type") || "application/json";
+    res.setHeader("Content-Type", contentType);
 
-    if (contentType.includes('application/json')) {
+    if (contentType.includes("application/json")) {
       const data = await response.json();
       res.json(data);
     } else {
       const text = await response.text();
       res.send(text);
     }
-
   } catch (e) {
-    console.error('API Proxy error for', targetUrl, ':', e);
-    res.status(500).json({ error: 'Proxy error: ' + e.message });
+    console.error("API Proxy error for", targetUrl, ":", e);
+    res.status(500).json({ error: "Proxy error: " + e.message });
   }
 });
 
-app.options('/proxy/api', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+app.options("/proxy/api", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
   res.status(200).send();
 });
 
-
-app.get('/proxy/live-sport', async (req, res) => {
+app.get("/proxy/live-sport", async (req, res) => {
   const urlPath = req.query.url;
 
-  if (!urlPath || !urlPath.startsWith('/api')) {
-    return res.status(400).json({ error: 'Missing or invalid url query parameter. It must start with /api' });
+  if (!urlPath || !urlPath.startsWith("/api")) {
+    return res.status(400).json({
+      error: "Missing or invalid url query parameter. It must start with /api",
+    });
   }
 
   try {
@@ -448,18 +507,16 @@ app.get('/proxy/live-sport', async (req, res) => {
     const response = await fetch(targetUrl);
 
     if (!response.ok) {
-      return res.status(response.status).json({ error: 'Upstream error' });
+      return res.status(response.status).json({ error: "Upstream error" });
     }
 
     const data = await response.json();
     res.json(data);
   } catch (error) {
-    console.error('Proxy error:', error);
-    res.status(500).json({ error: 'Internal server error (proxy)' });
+    console.error("Proxy error:", error);
+    res.status(500).json({ error: "Internal server error (proxy)" });
   }
 });
-
-
 
 // Node.js (Express example)
 app.get(
@@ -477,14 +534,12 @@ app.get(
 
       if (req?.user?.role === "superadmin") {
         if (req?.user?.role !== user?.role && user?.role !== "superadmin") {
-          return res
-            .status(403)
-            .json({
-              success: false,
-              redirect: true,
-              error: "Session Mismatched!!",
-              reditectTo: "/session-mismatched",
-            });
+          return res.status(403).json({
+            success: false,
+            redirect: true,
+            error: "Session Mismatched!!",
+            reditectTo: "/session-mismatched",
+          });
         }
         const responsee = await fetch(
           `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
@@ -495,14 +550,12 @@ app.get(
 
       if (req?.user?.role === "admin") {
         if (req?.user?.role !== user?.role && user?.role !== "admin") {
-          return res
-            .status(403)
-            .json({
-              success: false,
-              redirect: true,
-              error: "Session Mismatched!!",
-              reditectTo: "/session-mismatched",
-            });
+          return res.status(403).json({
+            success: false,
+            redirect: true,
+            error: "Session Mismatched!!",
+            reditectTo: "/session-mismatched",
+          });
         }
         const responsee = await fetch(
           `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
@@ -642,14 +695,29 @@ app.post("/auth/register", async (req, res) => {
         .json({ success: false, error: "Username or email already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({
+    const newUser = await User.create({
       username,
       email,
       password: hashedPassword,
       fullName,
     });
-    await newUser.save();
 
+    if (ENFORCE_2FA) {
+      // Only allow setup step
+      const mfa_token = jwt.sign(
+        { sub: newUser._id.toString(), stage: "setup" },
+        JWT_SECRET,
+        { expiresIn: MFA_TOKEN_TTL }
+      );
+      return res.status(201).json({
+        success: true,
+        message: "Account created. 2FA setup required.",
+        mfa_setup_required: true,
+        mfa_token,
+      });
+    }
+
+    // (Not used when mandatory, but kept for completeness)
     const token = jwt.sign({ id: newUser._id, username }, JWT_SECRET, {
       expiresIn: "30d",
     });
@@ -657,43 +725,52 @@ app.post("/auth/register", async (req, res) => {
       success: true,
       message: "User registered",
       token,
-      user: { id: newUser._id, username, email, fullName, role: newUser?.role },
+      user: { id: newUser._id, username, email, fullName, role: newUser.role },
     });
   } catch (err) {
     console.error("Registration error:", err);
     res.status(500).json({ success: false, error: "Registration failed" });
   }
 });
+
 // Login route
+// password stage
 app.post("/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body;
-
     const user = await User.findOne({
       $or: [{ username }, { email: username }],
     });
+
     if (!user || !(await bcrypt.compare(password, user.password)))
       return res
         .status(401)
         .json({ success: false, error: "Invalid credentials" });
 
-    const token = jwt.sign(
-      { id: user._id, username: user.username },
+    if (ENFORCE_2FA && !user.twoFA?.enabled) {
+      // Force them into setup path
+      const mfa_token = jwt.sign(
+        { sub: user._id.toString(), stage: "setup" },
+        JWT_SECRET,
+        { expiresIn: MFA_TOKEN_TTL }
+      );
+      return res.status(403).json({
+        success: false,
+        need_2fa_setup: true,
+        message: "2FA is mandatory. Complete setup to continue.",
+        mfa_token,
+      });
+    }
+
+    // 2FA enabled → always require OTP step
+    const mfa_token = jwt.sign(
+      { sub: user._id.toString(), stage: "mfa" },
       JWT_SECRET,
-      { expiresIn: "30d" }
+      { expiresIn: MFA_TOKEN_TTL }
     );
-    res.json({
-      success: true,
-      message: "Login successful",
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        fullName: user?.fullName,
-        role: user?.role,
-      },
-    });
+    return res
+      .status(200)
+      .json({ success: true, mfa_required: true, mfa_token });
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ success: false, error: "Login failed" });
@@ -701,19 +778,26 @@ app.post("/auth/login", async (req, res) => {
 });
 
 app.get("/region", async (req, res) => {
-  const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
+  const ip =
+    req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
   const geo = geoip.lookup(ip);
   countries.registerLocale(require("i18n-iso-countries/langs/en.json"));
   const countryName = countries.getName(geo?.country, "en");
-  return res.status(200).json({ success: true, data: { message: `Successfully configured ip`, data: { ...geo, ip, countryName: countryName } } });
-})
+  return res.status(200).json({
+    success: true,
+    data: {
+      message: `Successfully configured ip`,
+      data: { ...geo, ip, countryName: countryName },
+    },
+  });
+});
 
 app.get("/history/stream", authenticateToken, async (req, res) => {
   try {
     const { streamType, isCompleted } = req.query;
     const userId =
       typeof req.user.id === "string" &&
-        mongoose.Types.ObjectId.isValid(req.user.id)
+      mongoose.Types.ObjectId.isValid(req.user.id)
         ? new mongoose.Types.ObjectId(req.user.id)
         : undefined;
 
