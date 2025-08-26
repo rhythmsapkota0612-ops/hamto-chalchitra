@@ -10,7 +10,7 @@ async function sendPasswordReset(to, link) {
   const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
 
   sendSmtpEmail.sender = {
-    name: "Bravo App",
+    name: "Hamro Chalchitra",
     email: process.env.MAIL_FROM || "no-reply@yourdomain.com",
   };
 
