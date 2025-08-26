@@ -17,6 +17,7 @@ const TVAccessRequest = require("./models/tvAccess");
 const TVAccessSession = require("./models/tvAccessSession");
 const requireRole = require("./middlewares/roles");
 
+const crypto = require("crypto");
 const Session = require("./models/session");
 
 const adminRoutes = require("./routes/admin"); // <- path to the file above
