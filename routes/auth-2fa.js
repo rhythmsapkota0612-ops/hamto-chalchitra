@@ -12,6 +12,12 @@ const {
   compareHash,
 } = require("../utils/crypto");
 
+const {
+  createSession,
+  revokeOldestSessionsIfNeeded,
+  signFinalToken,
+} = require("../utils/auth");
+
 // Config comes from your main file via process.env or defaults
 const JWT_SECRET =
   process.env.JWT_SECRET || "your-secret-key-change-in-production";
@@ -107,51 +113,51 @@ router.post("/setup", requireSetupToken, async (req, res) => {
 // --- 2) Verify setup: confirm OTP, enable 2FA, issue backup codes ---
 router.post("/verify-setup", requireSetupToken, async (req, res) => {
   try {
-    const { token } = req.body; // 6-digit OTP
-    if (!token)
+    const { token: otp } = req.body; // 6-digit OTP from user
+    if (!otp)
       return res.status(400).json({ success: false, error: "OTP required" });
 
     const user = await User.findById(req.userId);
-    if (!user?.twoFA?.tempSecretEnc)
+    if (!user?.twoFA?.tempSecretEnc) {
       return res
         .status(400)
         .json({ success: false, error: "No setup in progress" });
+    }
 
     const base32 = decrypt(user.twoFA.tempSecretEnc);
     const ok = speakeasy.totp.verify({
       secret: base32,
       encoding: "base32",
-      token,
+      token: otp,
       window: 1,
     });
     if (!ok)
       return res.status(400).json({ success: false, error: "Invalid OTP" });
 
-    // finalize
+    // ---- finalize 2FA on the user ----
     user.twoFA.secretEnc = encrypt(base32);
     user.twoFA.enabled = true;
     user.twoFA.tempSecretEnc = null;
 
-    // create backup codes (show once)
-    const codes = Array.from(
-      { length: 8 },
-      () => require("crypto").randomBytes(4).toString("hex") // 8 hex chars
+    // generate backup codes (show once)
+    const codesPlain = Array.from({ length: 8 }, () =>
+      require("crypto").randomBytes(4).toString("hex")
     );
-    user.twoFA.backupCodes = await Promise.all(codes.map(hashString));
+    user.twoFA.backupCodes = await Promise.all(codesPlain.map(hashString));
 
     await user.save();
 
-    // Issue FINAL auth token now (already MFA-verified)
-    const finalToken = jwt.sign(
-      { id: user._id, username: user.username, mfa: true, role: user?.role },
-      JWT_SECRET,
-      { expiresIn: "30d" }
-    );
+    // ---- create a device session & enforce device cap ----
+    const session = await createSession(user._id, req);
+    await revokeOldestSessionsIfNeeded(user, session._id.toString());
 
-    res.json({
+    // ---- issue FINAL session-bound token (includes sid & mfa:true) ----
+    const finalToken = signFinalToken(user, session);
+
+    return res.json({
       success: true,
       message: "2FA enabled",
-      backupCodes: codes, // <-- show once on UI, ask to store securely
+      backupCodes: codesPlain, // show once to the user
       token: finalToken,
       user: {
         id: user._id,
@@ -163,34 +169,34 @@ router.post("/verify-setup", requireSetupToken, async (req, res) => {
     });
   } catch (e) {
     console.error("2FA verify-setup error:", e);
-    res
+    return res
       .status(500)
       .json({ success: false, error: "Failed to verify 2FA setup" });
   }
 });
 
-// --- 3) MFA login step (after /auth/login returns mfa_token) ---
 router.post("/login", otpLimiter, requireMfaStageToken, async (req, res) => {
   try {
     const { otp, backupCode } = req.body;
     const user = await User.findById(req.userId);
-    if (!user?.twoFA?.enabled)
+    if (!user?.twoFA?.enabled) {
       return res.status(400).json({ success: false, error: "2FA not enabled" });
+    }
 
     let ok = false;
 
-    // Prefer OTP
+    // 1) Prefer OTP
     if (otp) {
       const base32 = decrypt(user.twoFA.secretEnc);
       ok = speakeasy.totp.verify({
         secret: base32,
         encoding: "base32",
         token: otp,
-        window: 1,
+        window: 1, // allow ±30s
       });
     }
 
-    // Or accept a backup code (one-time)
+    // 2) Or accept a one-time backup code
     if (!ok && backupCode) {
       const idx = await (async () => {
         for (let i = 0; i < (user.twoFA.backupCodes || []).length; i++) {
@@ -201,24 +207,27 @@ router.post("/login", otpLimiter, requireMfaStageToken, async (req, res) => {
       })();
       if (idx >= 0) {
         ok = true;
-        user.twoFA.backupCodes.splice(idx, 1); // consume code
+        user.twoFA.backupCodes.splice(idx, 1); // consume the used code
         await user.save();
       }
     }
 
-    if (!ok)
+    if (!ok) {
       return res
         .status(400)
         .json({ success: false, error: "Invalid OTP or backup code" });
+    }
 
-    // Issue FINAL auth token
-    const token = jwt.sign(
-      { id: user._id, username: user.username, mfa: true, role: user?.role },
-      JWT_SECRET,
-      { expiresIn: "30d" }
-    );
+    // 3) Create a per-device session for this login
+    const session = await createSession(user._id, req);
 
-    res.json({
+    // 4) Enforce admin-configured device cap (evict oldest if over limit)
+    await revokeOldestSessionsIfNeeded(user, session._id.toString());
+
+    // 5) Issue FINAL session-bound token (contains sid + mfa:true)
+    const token = signFinalToken(user, session);
+
+    return res.json({
       success: true,
       message: "MFA verified",
       token,
@@ -232,7 +241,7 @@ router.post("/login", otpLimiter, requireMfaStageToken, async (req, res) => {
     });
   } catch (e) {
     console.error("MFA login error", e);
-    res.status(500).json({ success: false, error: "MFA login failed" });
+    return res.status(500).json({ success: false, error: "MFA login failed" });
   }
 });
 

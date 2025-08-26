@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema({
   role: { type: String, default: "user" },
   createdAt: { type: Date, default: Date.now },
   fullName: { type: String, required: true },
+  maxDevices: { type: Number, default: 1 },
   twoFA: {
     enabled: { type: Boolean, default: false },
     secretEnc: { type: String, default: null },

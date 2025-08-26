@@ -17,6 +17,10 @@ const TVAccessRequest = require("./models/tvAccess");
 const TVAccessSession = require("./models/tvAccessSession");
 const requireRole = require("./middlewares/roles");
 
+const Session = require("./models/session");
+
+const adminRoutes = require("./routes/admin"); // <- path to the file above
+
 // Configure multer for handling FormData
 const upload = multer();
 
@@ -641,7 +645,120 @@ app.post("/api/upload-chunk", uploadV2.single("file"), (req, res) => {
   });
 });
 
+const PasswordResetToken = require("./models/password-reset");
+const { sendPasswordReset } = require("./utils/mailer");
+const rateLimit = require("express-rate-limit");
+
+const forgotLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });
+
+app.post("/auth/forgot-password", forgotLimiter, async (req, res) => {
+  const { email } = req.body;
+  if (!email)
+    return res.status(400).json({ success: false, error: "Email required" });
+
+  const user = await User.findOne({ email });
+  // Always respond ok to avoid user enumeration
+  if (!user)
+    return res.json({
+      success: true,
+      message: "If that email exists, you'll receive a link shortly.",
+    });
+
+  const raw = crypto.randomBytes(24).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(raw).digest("hex");
+  const ttlMin = Number(process.env.PASSWORD_RESET_TTL_MIN || 30);
+  const expiresAt = new Date(Date.now() + ttlMin * 60 * 1000);
+
+  await PasswordResetToken.create({ userId: user._id, tokenHash, expiresAt });
+
+  const link = `${
+    process.env.RESET_URL_BASE
+  }?token=${raw}&uid=${user._id.toString()}`;
+  try {
+    await sendPasswordReset(user.email, link);
+  } catch (e) {
+    /* log but don't leak */
+  }
+
+  res.json({
+    success: true,
+    message: "If that email exists, you'll receive a link shortly.",
+  });
+});
+
+app.post("/auth/reset-password", async (req, res) => {
+  const { uid, token, newPassword } = req.body;
+  if (!uid || !token || !newPassword) {
+    return res
+      .status(400)
+      .json({ success: false, error: "uid, token, newPassword required" });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({
+      success: false,
+      error: "Password must be at least 6 characters",
+    });
+  }
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const entry = await PasswordResetToken.findOne({
+    userId: uid,
+    tokenHash,
+  }).sort({ createdAt: -1 });
+  if (!entry || entry.usedAt || entry.expiresAt < new Date()) {
+    return res
+      .status(400)
+      .json({ success: false, error: "Invalid or expired token" });
+  }
+
+  const user = await User.findById(uid);
+  if (!user)
+    return res.status(404).json({ success: false, error: "User not found" });
+
+  user.password = await bcrypt.hash(newPassword, 10);
+  await user.save();
+
+  entry.usedAt = new Date();
+  await entry.save();
+
+  await Session.updateMany(
+    { userId: user._id, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+
+  res.json({ success: true, message: "Password updated. Please login again." });
+});
+
+app.post("/auth/logout", authenticateToken, async (req, res) => {
+  try {
+    const sid = req.session?.id;
+    if (!sid) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No active session" });
+    }
+
+    const s = await Session.findById(sid);
+    if (!s) {
+      // Session already missing; treat as logged out
+      return res.json({ success: true, message: "Logged out" });
+    }
+    if (s.revokedAt) {
+      return res.json({ success: true, message: "Already logged out" });
+    }
+
+    s.revokedAt = new Date();
+    await s.save();
+    return res.json({ success: true, message: "Logged out" });
+  } catch (e) {
+    console.error("POST /auth/logout error:", e);
+    return res.status(500).json({ success: false, error: "Logout failed" });
+  }
+});
+
 app.use("/streams", express.static(path.join(__dirname, "streams")));
+
+app.use("/admin", adminRoutes);
 
 app.get("/api/ping", (req, res) => res.send("pong"));
 
@@ -739,24 +856,28 @@ app.post("/auth/register", async (req, res) => {
 
 // Login route
 // password stage
+// BEFORE MFA step: warn if max devices would be exceeded
 app.post("/auth/login", async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, force } = req.body;
     const user = await User.findOne({
       $or: [{ username }, { email: username }],
     });
 
-    if (!user || !(await bcrypt.compare(password, user.password)))
+    if (!user || !(await bcrypt.compare(password, user.password))) {
       return res
         .status(401)
         .json({ success: false, error: "Invalid credentials" });
+    }
 
+    // 2FA mandatory?
     if (ENFORCE_2FA && !user.twoFA?.enabled) {
-      // Force them into setup path
       const mfa_token = jwt.sign(
         { sub: user._id.toString(), stage: "setup" },
         JWT_SECRET,
-        { expiresIn: MFA_TOKEN_TTL }
+        {
+          expiresIn: MFA_TOKEN_TTL,
+        }
       );
       return res.status(403).json({
         success: false,
@@ -766,15 +887,48 @@ app.post("/auth/login", async (req, res) => {
       });
     }
 
-    // 2FA enabled → always require OTP step
+    // Sessions check
+    const max = Math.max(1, user.maxDevices || 1);
+    const active = await Session.find({
+      userId: user._id,
+      revokedAt: null,
+    }).sort({ createdAt: 1 });
+
+    // Always issue an MFA token for the next step (login OTP)
     const mfa_token = jwt.sign(
       { sub: user._id.toString(), stage: "mfa" },
       JWT_SECRET,
-      { expiresIn: MFA_TOKEN_TTL }
+      {
+        expiresIn: MFA_TOKEN_TTL,
+      }
     );
-    return res
-      .status(200)
-      .json({ success: true, mfa_required: true, mfa_token });
+
+    // If at limit and user hasn't confirmed, send preflight warning
+    if (active.length >= max && !force) {
+      return res.status(428).json({
+        success: false,
+        code: "MAX_SESSIONS_REACHED",
+        message: `You’ve reached the maximum allowed devices (${max}). Continuing will revoke your oldest session.`,
+        requiresSessionRevoke: true,
+        mfa_required: true,
+        mfa_token, // FE will keep this and, if user confirms, proceed to OTP
+        activeSessions: active.map((s) => ({
+          id: s._id.toString(),
+          deviceId: s.deviceId,
+          createdAt: s.createdAt,
+          lastSeenAt: s.lastSeenAt,
+        })),
+        maxDevices: max,
+      });
+    }
+
+    // Otherwise proceed to MFA verification step
+    return res.status(200).json({
+      success: true,
+      mfa_required: true,
+      mfa_token,
+      willRevokeOnSuccess: active.length >= max, // FYI flag for FE (optional)
+    });
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ success: false, error: "Login failed" });
@@ -922,13 +1076,14 @@ app.post("/history/stream", upload.none(), async (req, res) => {
 
     let user;
 
-    jwt.verify(token, JWT_SECRET, (err, us) => {
-      if (err) {
-        console.error("JWT verification failed:", err);
-        return res.status(403).json({ error: "Invalid token" });
-      }
-      user = us;
-    });
+    const { validateFinalTokenAndSession } = require("./utils/auth");
+    let payload;
+    try {
+      ({ payload } = await validateFinalTokenAndSession(token));
+    } catch {
+      return res.status(403).json({ error: "Invalid token/session" });
+    }
+    user = payload;
 
     if (!user) {
       return res.status(403).json({ error: "Invalid token" });
@@ -1007,10 +1162,14 @@ app.patch("/history/stream", async (req, res) => {
 
     let user;
 
-    jwt.verify(token, JWT_SECRET, (err, us) => {
-      if (err) return res.sendStatus(403);
-      user = us;
-    });
+    const { validateFinalTokenAndSession } = require("./utils/auth");
+    let payload;
+    try {
+      ({ payload } = await validateFinalTokenAndSession(token));
+    } catch {
+      return res.status(403).json({ error: "Invalid token/session" });
+    }
+    user = payload;
 
     const query = {
       userId: user.id,
@@ -1046,47 +1205,37 @@ app.patch("/history/stream", async (req, res) => {
   }
 });
 
-// Get current user info
+// Get current user info (final token + live session required)
 app.get("/auth/me", authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    if (!user)
+    // authenticateToken should set req.user.id and req.session.{id,deviceId}
+    const user = await User.findById(req.user.id).lean();
+    if (!user) {
       return res.status(404).json({ success: false, error: "User not found" });
-
-    if (ENFORCE_2FA && !user.twoFA?.enabled) {
-      // Force them into setup path
-      const mfa_token = jwt.sign(
-        { sub: user._id.toString(), stage: "setup" },
-        JWT_SECRET,
-        { expiresIn: MFA_TOKEN_TTL }
-      );
-      return res.json({
-        success: true,
-        need_2fa_setup: true,
-        message: "2FA is mandatory. Complete setup to continue.",
-        mfa_token,
-        user: {
-          id: user._id,
-          username: user.username,
-          email: user.email,
-          role: user?.role,
-          createdAt: user.createdAt,
-        },
-      });
     }
 
-    res.json({
+    return res.json({
       success: true,
       user: {
         id: user._id,
         username: user.username,
         email: user.email,
-        role: user?.role,
+        role: user.role,
+        fullName: user.fullName,
         createdAt: user.createdAt,
+        mfaEnabled: !!user.twoFA?.enabled,
+        maxDevices: typeof user.maxDevices === "number" ? user.maxDevices : 1,
       },
+      // Optional: echo current session info for the client
+      session: req.session
+        ? { id: req.session.id, deviceId: req.session.deviceId }
+        : undefined,
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Failed to fetch user" });
+    console.error("GET /auth/me error:", err);
+    return res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch user" });
   }
 });
 
