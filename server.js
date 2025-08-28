@@ -951,6 +951,121 @@ app.get("/region", async (req, res) => {
   });
 });
 
+const COMMON_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+  Referer: "https://einthusan.tv/",
+  Origin: "https://einthusan.tv",
+  Accept: "*/*",
+};
+
+const resolveUrl = (base, ref) => new URL(ref, base).toString();
+
+app.get("/proxy/enthu/manifest", async (req, res) => {
+  const u = req.query.u;
+  if (!u) return res.status(400).send("Missing ?u");
+
+  const manifestUrl = decodeURIComponent(u);
+
+  try {
+    const upstream = await fetch(manifestUrl, { headers: COMMON_HEADERS });
+    if (!upstream.ok) {
+      return res.status(502).send(`Upstream error: ${upstream.status}`);
+    }
+    const text = await upstream.text();
+    const base = manifestUrl;
+
+    // Rewrite URIs in manifest
+    const rewritten = text
+      .split("\n")
+      .map((line) => {
+        const trimmed = line.trim();
+
+        // Key line: #EXT-X-KEY:...URI="..."
+        if (trimmed.startsWith("#EXT-X-KEY")) {
+          return trimmed.replace(/URI="([^"]+)"/, (_m, uri) => {
+            const abs = resolveUrl(base, uri);
+            const prox = `/proxy/enthu/segment?u=${encodeURIComponent(abs)}`;
+            return `URI="${prox}"`;
+          });
+        }
+
+        // Init segment: #EXT-X-MAP:URI="..."
+        if (trimmed.startsWith("#EXT-X-MAP")) {
+          return trimmed.replace(/URI="([^"]+)"/, (_m, uri) => {
+            const abs = resolveUrl(base, uri);
+            const prox = `/proxy/enthu/segment?u=${encodeURIComponent(abs)}`;
+            return `URI="${prox}"`;
+          });
+        }
+
+        // Comments/tags/empty -> return as-is
+        if (trimmed.startsWith("#") || trimmed === "") return line;
+
+        // Non-tag lines are URIs (segments or nested playlists)
+        const abs = resolveUrl(base, trimmed);
+        if (abs.endsWith(".m3u8")) {
+          // Nested playlist -> re-enter manifest route
+          return `/proxy/enthu/manifest?u=${encodeURIComponent(abs)}`;
+        }
+        // Media segment (.ts, .mp4, etc.)
+        return `/proxy/enthu/segment?u=${encodeURIComponent(abs)}`;
+      })
+      .join("\n");
+
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+    res.setHeader("Cache-Control", "no-cache");
+    res.send(rewritten);
+  } catch (err) {
+    console.error("Manifest proxy error:", err);
+    res.status(500).send("Proxy error (manifest)");
+  }
+});
+
+app.get("/proxy/enthu/segment", async (req, res) => {
+  const u = req.query.u;
+  if (!u) return res.status(400).send("Missing ?u");
+
+  const targetUrl = decodeURIComponent(u);
+
+  try {
+    // Forward Range header for partial content
+    const range = req.headers.range;
+
+    const upstream = await fetch(targetUrl, {
+      headers: { ...COMMON_HEADERS, ...(range ? { Range: range } : {}) },
+    });
+
+    // Pass through important headers
+    const ct = upstream.headers.get("content-type");
+    const cl = upstream.headers.get("content-length");
+    const ar = upstream.headers.get("accept-ranges");
+    const cr = upstream.headers.get("content-range");
+    const cc = upstream.headers.get("cache-control");
+
+    if (ct) res.setHeader("Content-Type", ct);
+    if (cl) res.setHeader("Content-Length", cl);
+    if (ar) res.setHeader("Accept-Ranges", ar);
+    if (cr) res.setHeader("Content-Range", cr);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", cc || "public, max-age=60");
+
+    res.status(upstream.status);
+    upstream.body.pipe(res);
+  } catch (err) {
+    console.error("Segment proxy error:", err);
+    res.status(500).send("Proxy error (segment)");
+  }
+});
+
+// Example: quick test route pointing to your original URL
+app.get("/proxy/enthu/test", (req, res) => {
+  const url =
+    "https://cdn3.einthusan.io/etv/content/DgkoL.mp4.m3u8?e=1756382772&md5=idx4MONRAp1AhoeeKrkzJA";
+  const prox = `/proxy/enthu/manifest?u=${encodeURIComponent(url)}`;
+  res.send(prox);
+});
+
 app.get("/history/stream", authenticateToken, async (req, res) => {
   try {
     const { streamType, isCompleted } = req.query;
