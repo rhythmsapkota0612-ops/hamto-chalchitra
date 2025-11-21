@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
+const { createProxyMiddleware } = require('http-proxy-middleware');
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
 const User = require("./models/user");
@@ -34,7 +35,12 @@ const fetch = (...args) =>
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:8080", 
+    credentials: true,
+  })
+);
 app.use(express.json());
 // app.set('trust proxy', true);
 
@@ -523,6 +529,110 @@ app.get("/proxy/live-sport", async (req, res) => {
   }
 });
 
+
+app.get("/vv2/hamro-tv", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: "Missing ?url parameter" });
+
+    // Decode URL (handle double-encoding)
+    let decodedUrl = url;
+    try {
+      while (decodedUrl.includes("%")) {
+        const newDecoded = decodeURIComponent(decodedUrl);
+        if (newDecoded === decodedUrl) break;
+        decodedUrl = newDecoded;
+      }
+    } catch (e) {}
+
+    if (!decodedUrl.startsWith("http://") && !decodedUrl.startsWith("https://")) {
+      return res.status(400).json({ error: "Invalid URL", url: decodedUrl });
+    }
+
+    let baseUrl;
+    try {
+      baseUrl = new URL(decodedUrl);
+    } catch (e) {
+      return res.status(400).json({ error: "Invalid URL format", url: decodedUrl });
+    }
+
+    const origin = `${baseUrl.protocol}//${baseUrl.host}`;
+    const basePath = decodedUrl.substring(0, decodedUrl.lastIndexOf("/") + 1);
+
+    console.log("Proxying:", decodedUrl);
+
+    const response = await fetch(decodedUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://webtv.nettv.com.np/",
+        "Origin": "https://webtv.nettv.com.np",
+        "Accept": "*/*",
+      },
+      redirect: "follow",
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Upstream: ${response.status}` });
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+
+    // Handle .m3u8 playlists - rewrite URLs
+    if (decodedUrl.includes(".m3u8") || contentType.includes("mpegurl")) {
+      let body = await response.text();
+
+      body = body.split("\n").map(line => {
+        line = line.trim();
+        if (line.startsWith("#")) {
+          if (line.includes("URI=")) {
+            return line.replace(/URI="([^"]+)"/, (_, uri) => {
+              const fullUrl = resolveUrl(uri, basePath, origin);
+              return `URI="${getProxyUrl(req, fullUrl)}"`;
+            });
+          }
+          return line;
+        }
+        if (!line) return line;
+        const fullUrl = resolveUrl(line, basePath, origin);
+        return getProxyUrl(req, fullUrl);
+      }).join("\n");
+
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.send(body);
+    }
+
+    // Handle .ts segments - buffer and send
+    res.setHeader("Content-Type", contentType || "video/mp2t");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.send(buffer);
+
+  } catch (err) {
+    console.error("Proxy error:", err.message);
+    res.status(500).json({ error: "Proxy failed", details: err.message });
+  }
+});
+
+function resolveUrl(url, basePath, origin) {
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  if (url.startsWith("/")) return origin + url;
+  return basePath + url;
+}
+
+function getProxyUrl(req, targetUrl) {
+  const proxyBase = `${req.protocol}://${req.get("host")}`;
+  return `${proxyBase}/vv2/hamro-tv?url=${encodeURIComponent(targetUrl)}`;
+}
+
+app.options("/vv2/hamro-tv", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.sendStatus(204);
+});
+
 // Node.js (Express example)
 app.get(
   "/api/getlink",
@@ -562,6 +672,7 @@ app.get(
             reditectTo: "/session-mismatched",
           });
         }
+        console.log("here 1233445")
         const responsee = await fetch(
           `https://www.techjail.net/aamshd/huritv9/getlink.php?vv=1&CHID=${CHID}`
         );
@@ -761,7 +872,233 @@ app.use("/streams", express.static(path.join(__dirname, "streams")));
 
 app.use("/admin", adminRoutes);
 
+
+// // Login endpoint
+// app.post('/api/fantasy/login', async (req, res) => {
+//   const { email, password } = req.body;
+//   console.log(email)
+
+//   if (!email || !password) {
+//     return res.status(400).json({ error: 'Email and password required' });
+//   }
+
+
+//   try {
+//     // Login to FPL
+//     const response = await fetch('https://users.premierleague.com/accounts/login/', {
+//       method: 'POST',
+//       headers: {
+//         'Content-Type': 'application/json',
+//         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+//       },
+//       body: JSON.stringify({
+//         login: email,
+//         password: password,
+//         redirect_uri: 'https://fantasy.premierleague.com/',
+//         app: 'plfpl-web'
+//       })
+//     });
+
+
+//     const data = response?.text();
+
+//     if (!response.ok) {
+//       return res.status(response.status).json({
+//         error: 'Login failed',
+//         details: data
+//       });
+//     }
+
+//     // Extract cookies from response
+//     const cookies = response.headers.get('set-cookie');
+    
+//     if (cookies) {
+//       // Parse and store session cookies
+//       const sessionId = `session_${Date.now()}`;
+//       userSessions.set(sessionId, {
+//         cookies: cookies,
+//         timestamp: Date.now()
+//       });
+
+//       // Set session cookie for client
+//       res.cookie('fpl_session', sessionId, {
+//         httpOnly: true,
+//         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+//         sameSite: 'lax'
+//       });
+
+//       return res.json({
+//         success: true,
+//         message: 'Login successful',
+//         user: data
+//       });
+//     } else {
+//       return res.status(500).json({
+//         error: 'Failed to get session cookies'
+//       });
+//     }
+//   } catch (error) {
+//     console.error('Login error:', error);
+//     res.status(500).json({
+//       error: 'Login failed',
+//       message: error.message
+//     });
+//   }
+// });
+
+// // Logout endpoint
+// app.post('/api/fantasy/logout', (req, res) => {
+//   const sessionId = req.cookies.fpl_session;
+  
+//   if (sessionId) {
+//     userSessions.delete(sessionId);
+//   }
+  
+//   res.clearCookie('fpl_session');
+//   res.json({ success: true, message: 'Logged out successfully' });
+// });
+
+// // Check auth status
+// app.get('/api/fantasy/auth/status', (req, res) => {
+//   const sessionId = req?.cookies?.fpl_session;
+//   const session = sessionId ? userSessions.get(sessionId) : null;
+  
+//   res.json({
+//     authenticated: !!session,
+//     sessionId: sessionId || null
+//   });
+// });
+
+// // Middleware to attach auth cookies to proxied requests
+// const attachAuthCookies = (proxyReq, req, res) => {
+//   const sessionId = req.cookies.fpl_session;
+//   const session = sessionId ? userSessions.get(sessionId) : null;
+
+//   console.log("here,aa")
+
+//   // Mimic browser headers
+//   proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+//   proxyReq.setHeader('Accept', 'application/json, text/plain, */*');
+//   proxyReq.setHeader('Accept-Language', 'en-US,en;q=0.9');
+//   proxyReq.setHeader('Accept-Encoding', 'gzip, deflate, br');
+//   proxyReq.setHeader('Origin', 'https://fantasy.premierleague.com');
+//   proxyReq.setHeader('Referer', 'https://fantasy.premierleague.com/');
+//   proxyReq.setHeader('DNT', '1');
+//   proxyReq.setHeader('Connection', 'keep-alive');
+//   proxyReq.setHeader('Sec-Fetch-Dest', 'empty');
+//   proxyReq.setHeader('Sec-Fetch-Mode', 'cors');
+//   proxyReq.setHeader('Sec-Fetch-Site', 'same-origin');
+
+//   // Attach session cookies if user is authenticated
+//   if (session && session.cookies) {
+//     proxyReq.setHeader('Cookie', session.cookies);
+//   }
+// };
+
+
+
+// // Logging middleware - only for proxy routes
+// const proxyLogger = (req, res, next) => {
+//   console.log(`[${new Date().toISOString()}] FPL Proxy: ${req.method} ${req.url}`);
+//   next();
+// };
+
+
+// // Proxy configuration for GET requests (public data)
+// const publicProxyOptions = {
+//   target: 'https://fantasy.premierleague.com/api',
+//   changeOrigin: true,
+//   pathRewrite: {
+//     '^/api/fantasy': '/api',
+//   },
+//   onProxyReq: attachAuthCookies,
+//   onProxyRes: (proxyRes, req, res) => {
+//     console.log(`FPL Proxy Response: ${proxyRes.statusCode} for ${req.path}`);
+//     console.log('Content-Type:', proxyRes.headers['content-type']);
+//   },
+//   onError: (err, req, res) => {
+//     console.error('FPL Proxy Error:', err);
+//     res.status(500).json({
+//       error: 'Proxy Error',
+//       message: err.message
+//     });
+//   }
+// };
+
+// const authenticatedProxyOptions = {
+//   target: 'https://fantasy.premierleague.com/api/',
+//   changeOrigin: true,
+//   pathRewrite: {
+//     '^/api/fantasy': '/api',
+//   },
+//   onProxyReq: (proxyReq, req, res) => {
+//     const sessionId = req.cookies.fpl_session;
+//     const session = sessionId ? userSessions.get(sessionId) : null;
+
+//     console.log("request")
+
+//     if (!session) {
+//       res.status(401).json({ error: 'Authentication required' });
+//       return;
+//     }
+
+//     attachAuthCookies(proxyReq, req, res);
+
+//     // Forward request body for POST/PUT requests
+//     if (req.body && Object.keys(req.body).length > 0) {
+//       const bodyData = JSON.stringify(req.body);
+//       proxyReq.setHeader('Content-Type', 'application/json');
+//       proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+//       proxyReq.write(bodyData);
+//     }
+//   },
+//   onProxyRes: (proxyRes, req, res) => {
+//     console.log(`FPL Auth Proxy Response: ${proxyRes.statusCode} for ${req.path}`);
+//   },
+//   onError: (err, req, res) => {
+//     console.error('FPL Auth Proxy Error:', err);
+//     res.status(500).json({
+//       error: 'Proxy Error',
+//       message: err.message
+//     });
+//   }
+// };
+// app.use('/api/fantasy', (req, res, next) => {
+//   // Skip login/logout/auth routes
+
+//   console.log("here")
+//   if (req.path.startsWith('/login') || req.path.startsWith('/logout') || req.path.startsWith('/auth')) {
+//     return next();
+//   }
+
+//   if (req.method === 'GET') {
+
+
+//     console.log("hehhe")
+//     return createProxyMiddleware(publicProxyOptions)(req, res, next);
+//   }
+
+//   // POST, PUT, DELETE require authentication
+//   return createProxyMiddleware(authenticatedProxyOptions)(req, res, next);
+// }, proxyLogger);
+
 app.get("/api/ping", (req, res) => res.send("pong"));
+
+// app.get('/', (req, res) => {
+//   res.json({
+//     message: 'Server with FPL API Proxy',
+//     usage: {
+//       fplProxy: `http://localhost:${PORT}/api/fantasy/bootstrap-static/`,
+//       note: 'Only /api/fantasy/* routes are proxied to FPL API'
+//     },
+//     endpoints: {
+//       health: '/health',
+//       fplProxy: '/api/fantasy/* → https://fantasy.premierleague.com/api/*',
+//       yourRoutes: '/api/users, /api/posts, etc.'
+//     }
+//   });
+// });
+
 
 app.get("/fetch-html", async (req, res) => {
   const targetUrl = "https://www.techjail.net/aamshd/v9x9/";
@@ -946,7 +1283,7 @@ app.get("/region", async (req, res) => {
     success: true,
     data: {
       message: `Successfully configured ip`,
-      data: { ...geo, ip, countryName: countryName },
+      data: { ...geo, ip, countryName: "NEPAL" },
     },
   });
 });
@@ -958,8 +1295,6 @@ const COMMON_HEADERS = {
   Origin: "https://einthusan.tv",
   Accept: "*/*",
 };
-
-const resolveUrl = (base, ref) => new URL(ref, base).toString();
 
 app.get("/proxy/enthu/manifest", async (req, res) => {
   const u = req.query.u;
@@ -1565,6 +1900,402 @@ app.get(
     });
   }
 );
+
+
+// Store for user sessions (in production, use Redis or database)
+const userSessions = new Map();
+
+// FPL Proxy Routes
+
+// Login endpoint - Updated based on FPL API documentation
+app.post('/api/fantasy/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password required' });
+  }
+
+  try {
+    // Create a session by maintaining cookies
+    const session = require('cookie'); // You might want to use a proper session handler
+    
+    // Prepare the payload as form data
+    const payload = {
+      'password': password,
+      'login': email,
+      'redirect_uri': 'https://fantasy.premierleague.com/a/login',
+      'app': 'plfpl-web'
+    };
+
+    // Convert to URLSearchParams for proper form encoding
+    const formData = new URLSearchParams();
+    for (const [key, value] of Object.entries(payload)) {
+      formData.append(key, value);
+    }
+
+    console.log('Attempting FPL login for:', email);
+
+    const response = await fetch('https://users.premierleague.com/accounts/login/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Origin': 'https://fantasy.premierleague.com',
+        'Referer': 'https://fantasy.premierleague.com/',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-site'
+      },
+      body: formData.toString(),  
+    });
+
+    console.log('FPL Login Response Status:', response.status);
+    
+    // Get cookies from response
+    const setCookieHeaders = response.headers.raw()['set-cookie'];
+    console.log('Set-Cookie headers:', setCookieHeaders);
+
+    if (!setCookieHeaders || setCookieHeaders.length === 0) {
+      // Try to get error details from response body
+      let errorDetails = 'No session cookies received';
+      try {
+        const textData = await response.text();
+        console.log('Login response body:', textData.substring(0, 500));
+        
+        // Check if it's an HTML redirect page
+        if (textData.includes('302 Found') || textData.includes('Redirecting')) {
+          errorDetails = 'Login failed - likely invalid credentials (received redirect)';
+        }
+      } catch (e) {
+        console.error('Error reading response body:', e);
+      }
+
+      return res.status(401).json({
+        error: 'Login failed',
+        details: errorDetails,
+        status: response.status
+      });
+    }
+
+    // Extract the essential cookies
+    let plProfile = '';
+    let sessionIdFantasy = '';
+    let sessionIdUsers = '';
+
+    setCookieHeaders.forEach(cookie => {
+      if (cookie.includes('pl_profile')) {
+        const match = cookie.match(/pl_profile=([^;]+)/);
+        if (match) plProfile = match[1];
+      }
+      if (cookie.includes('sessionid') && cookie.includes('fantasy.premierleague.com')) {
+        const match = cookie.match(/sessionid=([^;]+)/);
+        if (match) sessionIdFantasy = match[1];
+      }
+      if (cookie.includes('sessionid') && cookie.includes('users.premierleague.com')) {
+        const match = cookie.match(/sessionid=([^;]+)/);
+        if (match) sessionIdUsers = match[1];
+      }
+    });
+
+    // Build the complete cookie string for authenticated requests
+    const cookieString = [
+      plProfile ? `pl_profile=${plProfile}` : '',
+      sessionIdFantasy ? `sessionid=${sessionIdFantasy}` : '',
+      sessionIdUsers ? `sessionid=${sessionIdUsers}` : ''
+    ].filter(Boolean).join('; ');
+
+    console.log('Essential cookies extracted:');
+    console.log('- pl_profile:', plProfile ? '✓' : '✗');
+    console.log('- sessionid (fantasy):', sessionIdFantasy ? '✓' : '✗');
+    console.log('- sessionid (users):', sessionIdUsers ? '✓' : '✗');
+    console.log('Complete cookie string:', cookieString);
+
+    if (!cookieString) {
+      return res.status(401).json({
+        error: 'Login failed - no valid session cookies received'
+      });
+    }
+
+    // Store the session
+    const sessionId = `fpl_session_${Date.now()}`;
+    userSessions.set(sessionId, {
+      cookies: cookieString,
+      timestamp: Date.now(),
+      plProfile,
+      sessionIdFantasy,
+      sessionIdUsers
+    });
+
+    // Set session cookie for client
+    res.cookie('fpl_session', sessionId, {
+      httpOnly: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      sameSite: 'lax'
+    });
+
+    // Verify the session works by testing an authenticated endpoint
+    try {
+      const testResponse = await fetch('https://fantasy.premierleague.com/api/me/', {
+        headers: {
+          'Cookie': cookieString,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json'
+        }
+      });
+
+      let userData = null;
+      if (testResponse.ok) {
+        userData = await testResponse.json();
+        console.log('Session verified successfully for user:', userData?.player_first_name);
+      } else {
+        console.log('Session test failed with status:', testResponse.status);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Login successful',
+        sessionId: sessionId,
+        user: userData,
+        verified: testResponse.ok,
+        cookies: {
+          plProfile: !!plProfile,
+          sessionIdFantasy: !!sessionIdFantasy,
+          sessionIdUsers: !!sessionIdUsers
+        }
+      });
+
+    } catch (testError) {
+      console.error('Session verification failed:', testError);
+      return res.json({
+        success: true,
+        message: 'Login completed but session verification failed',
+        sessionId: sessionId,
+        user: null,
+        verified: false
+      });
+    }
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      error: 'Login failed',
+      message: error.message
+    });
+  }
+});
+
+// Logout endpoint
+app.post('/api/fantasy/logout', (req, res) => {
+  const sessionId = req.cookies.fpl_session;
+  
+  if (sessionId) {
+    userSessions.delete(sessionId);
+  }
+  
+  res.clearCookie('fpl_session');
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// Check auth status
+app.get('/api/fantasy/auth/status', async (req, res) => {
+  const sessionId = req.cookies.fpl_session;
+  const session = sessionId ? userSessions.get(sessionId) : null;
+  
+  if (!session) {
+    return res.json({
+      authenticated: false,
+      sessionId: null
+    });
+  }
+
+  // Test the session by making a request to FPL API
+  try {
+    const testResponse = await fetch('https://fantasy.premierleague.com/api/me/', {
+      headers: {
+        'Cookie': session.cookies,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (testResponse.ok) {
+      const userData = await testResponse.json();
+      return res.json({
+        authenticated: true,
+        sessionId: sessionId,
+        user: userData
+      });
+    } else {
+      // Session expired or invalid
+      userSessions.delete(sessionId);
+      return res.json({
+        authenticated: false,
+        sessionId: null
+      });
+    }
+  } catch (error) {
+    console.error('Auth check error:', error);
+    return res.json({
+      authenticated: false,
+      sessionId: null
+    });
+  }
+});
+
+// Get current user's team info (requires auth)
+app.get('/api/fantasy/me', async (req, res) => {
+  const sessionId = req.cookies.fpl_session;
+  const session = sessionId ? userSessions.get(sessionId) : null;
+
+  if (!session) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  try {
+    const response = await fetch('https://fantasy.premierleague.com/api/me/', {
+      headers: {
+        'Cookie': session.cookies,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: 'Failed to get user data' });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    res.status(500).json({ error: 'Failed to fetch user data' });
+  }
+});
+
+// Middleware to attach auth cookies to proxied requests
+// Middleware to attach auth cookies to proxied requests
+const attachAuthCookies = (proxyReq, req, res) => {
+  const sessionId = req.cookies.fpl_session;
+  const session = sessionId ? userSessions.get(sessionId) : null;
+
+  // Mimic browser headers
+  proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  proxyReq.setHeader('Accept', 'application/json, text/plain, */*');
+  proxyReq.setHeader('Accept-Language', 'en-US,en;q=0.9');
+  proxyReq.setHeader('Accept-Encoding', 'gzip, deflate, br');
+  proxyReq.setHeader('Origin', 'https://fantasy.premierleague.com');
+  proxyReq.setHeader('Referer', 'https://fantasy.premierleague.com/');
+  proxyReq.setHeader('DNT', '1');
+  proxyReq.setHeader('Connection', 'keep-alive');
+  proxyReq.setHeader('Sec-Fetch-Dest', 'empty');
+  proxyReq.setHeader('Sec-Fetch-Mode', 'cors');
+  proxyReq.setHeader('Sec-Fetch-Site', 'same-origin');
+
+  // Attach session cookies if user is authenticated
+  if (session && session.cookies) {
+    proxyReq.setHeader('Cookie', session.cookies);
+    console.log('Attached FPL cookies to request');
+  } else {
+    console.log('No FPL session cookies available for request');
+  }
+};
+
+// Logging middleware - only for proxy routes
+const proxyLogger = (req, res, next) => {
+  console.log(`[${new Date().toISOString()}] FPL Proxy: ${req.method} ${req.path}`);
+  next();
+};
+
+// Proxy configuration for GET requests (public data)
+const publicProxyOptions = {
+  target: 'https://fantasy.premierleague.com/api',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/api/fantasy': '/api',
+  },
+  onProxyReq: attachAuthCookies,
+  onProxyRes: (proxyRes, req, res) => {
+    console.log(`FPL Proxy Response: ${proxyRes.statusCode} for ${req.path}`);
+  },
+  onError: (err, req, res) => {
+    console.error('FPL Proxy Error:', err);
+    res.status(500).json({
+      error: 'Proxy Error',
+      message: err.message
+    });
+  }
+};
+
+// Proxy configuration for authenticated requests (POST, PUT, DELETE)
+const authenticatedProxyOptions = {
+  target: 'https://fantasy.premierleague.com/api',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/api/fantasy': '/api',
+  },
+  onProxyReq: (proxyReq, req, res) => {
+    const sessionId = req.cookies.fpl_session;
+    const session = sessionId ? userSessions.get(sessionId) : null;
+
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+
+    attachAuthCookies(proxyReq, req, res);
+
+    // Forward request body for POST/PUT requests
+    if (req.body && Object.keys(req.body).length > 0) {
+      const bodyData = JSON.stringify(req.body);
+      proxyReq.setHeader('Content-Type', 'application/json');
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+    }
+  },
+  onProxyRes: (proxyRes, req, res) => {
+    console.log(`FPL Auth Proxy Response: ${proxyRes.statusCode} for ${req.path}`);
+  },
+  onError: (err, req, res) => {
+    console.error('FPL Auth Proxy Error:', err);
+    res.status(500).json({
+      error: 'Proxy Error',
+      message: err.message
+    });
+  }
+};
+
+// Main proxy route handler
+app.use('/api/fantasy', (req, res, next) => {
+  // Skip login/logout/auth routes
+  if (req.path.startsWith('/login') || req.path.startsWith('/logout') || req.path.startsWith('/auth')) {
+    return next();
+  }
+
+  if (req.method === 'GET') {
+    return createProxyMiddleware(publicProxyOptions)(req, res, next);
+  }
+
+  // POST, PUT, DELETE require authentication
+  return createProxyMiddleware(authenticatedProxyOptions)(req, res, next);
+}, proxyLogger);
+
+// Clean up old sessions periodically (every hour)
+setInterval(() => {
+  const now = Date.now();
+  const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+  
+  for (const [sessionId, session] of userSessions.entries()) {
+    if (now - session.timestamp > maxAge) {
+      userSessions.delete(sessionId);
+      console.log(`Cleaned up expired session: ${sessionId}`);
+    }
+  }
+}, 60 * 60 * 1000);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Proxy server running at http://localhost:${PORT}`);
