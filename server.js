@@ -556,7 +556,7 @@ app.get("/vv2/hamro-tv", async (req, res) => {
       return res.status(400).json({ error: "Invalid URL format", url: decodedUrl });
     }
 
-    const origin = `https://hamro-chalchitra.netlify.app`;
+    const origin = `https://hamto-chalchitra.onrender.com`;
     const basePath = decodedUrl.substring(0, decodedUrl.lastIndexOf("/") + 1);
 
     console.log("Proxying:", decodedUrl);
