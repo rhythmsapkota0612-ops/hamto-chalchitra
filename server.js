@@ -37,7 +37,7 @@ const PORT = 3001;
 
 app.use(
   cors({
-    origin: "http://localhost:8080", 
+    origin: "https://hamro-chalchitra.netlify.app", 
     credentials: true,
   })
 );
